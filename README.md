@@ -67,22 +67,52 @@ dsh plugin add dsh-star-pet        # 或从插件市场点安装
 | POST | `/dsh-star-pet/pet/start` \| `/pet/stop` | 手动启停 |
 | GET | `/dsh-star-pet/assets/*` | 皮肤雪碧图、字体、音效 |
 
-## 结构
-
-```
-lib/index.js            宿主：配置读写、素材服务、拉起 Electron helper
-lib/client.js           设置页（settings.section）
-runtime/helper/main.js  主进程：透明置顶窗口、拖动吸附、菜单/设置子窗
-runtime/helper/renderer.js  画面与计薪逻辑（与 exe 同源）
-runtime/helper/menu.*       右键菜单
-runtime/helper/settings.*   桌宠自带的设置窗（右键「设置」）
-assets/skins/*.webp     29 帧雪碧图（135 / 216 / 324 三档）
-assets/Ruanti.ttf       软萌体
-assets/click.wav        点击音效
-```
-
 ## 说明
 
 - 窗口使用 `transparent + alwaysOnTop('screen-saver') + skipTaskbar`，并默认整窗点击穿透，只有宠物、看板、胶囊区域接收鼠标事件——和 exe 的手感一致。
 - Windows 上为了透明分层窗口稳定，会关闭硬件加速（与 dsh-pet 相同做法）。
 - 计时全部在渲染进程里算，不依赖系统时钟轮询精度；宿主只负责持久化配置与窗口位置。
+
+## 项目结构
+
+```
+dsh-star-pet/
+├── package.json              插件清单：版本、dsh.bundle / dsh.client、files 白名单
+├── cordis.patch.yml          往 profile 里注册本插件的那一行
+├── icon.png                  市场卡片图标（236×256 位图）
+├── lib/
+│   ├── index.js              宿主侧：/dsh-star-pet 路由、配置读写、拉起 Electron helper
+│   └── client.js             浏览器侧：左侧栏图标「困困星人」，点击开关桌宠
+├── runtime/helper/           桌宠窗口本体（跑在独立 Electron 进程里）
+│   ├── main.js               主进程：透明置顶窗、拖拽、右键菜单、设置窗
+│   ├── renderer.js           渲染：看板排版、挤压动画、飘字、计薪计算
+│   ├── menu.html / menu.js   右键菜单（按内容自动量高）
+│   ├── settings.html / .js   设置窗（306×664，按内容自动定高）
+│   └── package.json          {"type":"commonjs"}，覆盖上层的 ESM 声明
+├── assets/
+│   ├── skins/pet-*.webp      29 帧雪碧图（1× 与 @2× 两套）
+│   ├── Ruanti.ttf            软萌体
+│   └── click.wav done.wav    点击音效
+└── docs/screenshots/         市场详情页截图（由 marketplace 从本 README 提取）
+```
+
+- 本机开发时，DSH 通过 `link:` 直接引用这个目录（`~/.dsh/profiles/desktop/package.json`），改完重启桌宠即可生效；
+- 发给别人用的是 `dsh-star-pet.tgz`（`files` 白名单打包，`docs/` 不进包）。
+
+## 离线分享（U 盘 / 内网）
+
+不需要 GitHub，也不需要网络，三样东西拷到 U 盘：
+
+| 文件 | 必需 | 说明 |
+|---|---|---|
+| `dsh-star-pet.tgz` | ✅ | 插件本体，约 5.7 MB |
+| `electron-v43.3.0-win32-x64.zip` | 建议 | 约 110 MB；对方机器没有 `~/.dsh/electron` 且不能联网时需要 |
+| 本说明 | — | 复制本节即可 |
+
+对方的操作：
+
+1. 把 `dsh-star-pet.tgz` 拷到任意目录，例如 `D:\pet\dsh-star-pet.tgz`；
+2. 打开 DSH，在任意会话里说：**安装这个插件：D:\pet\dsh-star-pet.tgz**（agent 会调用 `plugin_manager install_bundle`）；
+3. 如果桌宠没出现，把 `electron-v43.3.0-win32-x64.zip` 解压到 `C:\Users\<用户名>\.dsh\electron\`，确认里面直接就是 `electron.exe`，再点侧栏图标。
+
+联网时第 3 步可以省略：插件首次启动会自动从 npmmirror 下载 Electron（约 100 MB，只需一次）。
