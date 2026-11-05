@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>设置</title>
+<style>
+	@font-face {
+		font-family: "StarPetSoft";
+		src: url("../../assets/Ruanti.ttf") format("truetype");
+		font-display: block;
+	}
+	* { box-sizing: border-box; }
+	html, body {
+		margin: 0; padding: 0;
+		background: transparent;
+		overflow: hidden;
+		user-select: none;
+		font-family: var(--pet-font, "StarPetSoft", "Microsoft YaHei", sans-serif);
+	}
+	/* Tk: Toplevel(bg=SET_LINE) + 内层 Frame(bg=SET_BG, padx=1, pady=1) */
+	#shell {
+		position: absolute; inset: 0;
+		background: #232a35;
+		border-radius: 10px;
+		padding: 1px;
+	}
+	#body {
+		width: 100%; height: 100%;
+		background: #15191f;
+		border-radius: 9px;
+		display: flex; flex-direction: column;
+		padding: 16px 22px;
+	}
+	/* 只有顶部标题条可以拖窗（与 Tk 的 head/title 绑定一致），其余区域保持可交互 */
+	#head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;
+		-webkit-app-region: drag; -webkit-user-select: none; cursor: default; }
+	#head h1 { -webkit-app-region: drag; }
+	#close { -webkit-app-region: no-drag; }
+	#scroll, #bar, #msg, button, .step, .wd, .flag { -webkit-app-region: no-drag; }
+	#head h1 { margin: 0; font-size: 18.667px; font-weight: 700; color: #e9eef8; }
+	#close { font-size: 14.667px; color: #7d8798; cursor: default; padding: 0 4px; }
+	#close:hover { color: #e9eef8; }
+	#scroll { flex: 1; overflow-y: auto; padding-right: 2px; display: flex; flex-direction: column; }
+	/* 内容不满一屏时上下均分余量（视觉居中）；超出时占位收缩为 0，恢复普通滚动 */
+	#content { flex: 0 0 auto; margin: auto 0; }
+	#scroll::-webkit-scrollbar { width: 0; height: 0; }
+	#scroll::-webkit-scrollbar { width: 5px; }
+	#scroll::-webkit-scrollbar-thumb { background: #2b3242; border-radius: 3px; }
+	.rule { height: 1px; background: #232a35; margin: 10px 0 6px; }
+	.sec-title { font-size: 10.667px; color: #5d6675; margin: 0 0 2px; }
+	/* _stepper：label 左，[− 值 +] 组靠右 */
+	.row { display: flex; align-items: center; margin: 3px 0; }
+	.row .lab { flex: 1; font-size: 13.333px; color: #e9eef8; }
+	.grp { display: flex; align-items: center; }
+	.sbtn {
+		width: 24px; text-align: center; padding: 4px 0;
+		background: #1b212a; color: #7d8798; font-size: 14.667px;
+		cursor: default; border-radius: 3px;
+	}
+	.sbtn:hover { background: #24303f; color: #e9eef8; }
+	.val {
+		width: 96px; text-align: center; padding: 4px 2px;
+		font-size: 13.333px; color: #e9eef8;
+	}
+	.wds { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin: 4px 0 2px; }
+	.wd {
+		text-align: center; padding: 5px 2px; font-size: 12px;
+		background: #1b212a; color: #7d8798; border-radius: 3px; cursor: default;
+	}
+	.wd.on { background: #1d3a2b; color: #3ad17f; }
+	.flags { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 6px 0 0; }
+	.flag {
+		text-align: center; padding: 4px 2px; font-size: 12px;
+		background: #1b212a; color: #7d8798; border-radius: 3px; cursor: default;
+	}
+	.flag.on { background: #1d3a2b; color: #3ad17f; }
+	#ov { display: grid; grid-template-columns: auto auto; gap: 2px 8px; justify-content: center; align-items: baseline; margin: 4px 0 0; }
+	#ov .k { font-size: 12px; line-height: 1.35; color: #7d8798; text-align: right; }
+	#ov .v { line-height: 1.35; }
+	#ov .v { font-size: 13.333px; text-align: left; }
+	#msg { min-height: 0; margin-top: 6px; font-size: 10.667px; line-height: 17px; color: #ffb74d; white-space: pre-wrap; overflow: hidden; }
+	#bar { display: flex; flex-direction: row-reverse; justify-content: flex-start; gap: 6px; padding-top: 10px; }
+	button {
+		font-family: inherit; font-size: 13.333px; padding: 6px 10px;
+		border: none; border-radius: 4px; cursor: default;
+		background: #1b212a; color: #7d8798;
+	}
+	button:hover { background: #24303f; color: #e9eef8; }
+	button.primary { background: #1d3a2b; color: #3ad17f; }
+	button.primary:hover { background: #244a36; }
+</style>
+</head>
+<body>
+	<div id="shell">
+		<div id="body">
+			<div id="head"><h1>设置</h1><span id="close">✕</span></div>
+			<div id="scroll">
+				<div id="content">
+					<div class="rule" style="margin-top:0"></div>
+					<div class="sec-title">薪资</div>
+					<div id="sec-pay"></div>
+					<div class="rule"></div>
+					<div class="sec-title">时间</div>
+					<div id="sec-time"></div>
+					<div class="rule"></div>
+					<div class="sec-title">上班日</div>
+					<div class="wds" id="wds"></div>
+					<div class="rule"></div>
+					<div class="sec-title">外观</div>
+					<div id="sec-look"></div>
+					<div class="flags" id="flags"></div>
+					<div class="rule"></div>
+					<div class="sec-title">概览</div>
+					<div id="ov"></div>
+					<div id="msg"></div>
+				</div>
+			</div>
+			<div id="bar">
+				<button id="btn-reset">恢复默认</button>
+				<button id="btn-cancel">取消</button>
+				<button id="btn-save" class="primary">保存</button>
+			</div>
+		</div>
+	</div>
+	<script src="./settings.js"></script>
+</body>
+</html>

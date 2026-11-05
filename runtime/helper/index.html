@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>上班鼓励宠物</title>
+<style>
+	@font-face {
+		font-family: "StarPetSoft";
+		src: url("../../assets/Ruanti.ttf") format("truetype");
+		font-display: block;
+	}
+	* { box-sizing: border-box; }
+	html, body {
+		margin: 0; padding: 0;
+		width: 100%; height: 100%;
+		background: transparent;
+		overflow: hidden;
+		user-select: none;
+		-webkit-user-select: none;
+		cursor: default;
+		font-family: var(--pet-font, "StarPetSoft", "Microsoft YaHei", sans-serif);
+	}
+	#panel, #panel * , #chip, .float, #tip { font-family: inherit; }
+	#stage { position: absolute; inset: 0; }
+	#stage .abs { position: absolute; white-space: nowrap; line-height: 1; }
+
+	#panel {
+		position: absolute;
+		background: #171b23;
+		border: 1px solid #2b3242;
+		border-radius: 13px;
+		display: none;
+	}
+	#chip {
+		position: absolute;
+		line-height: 1;
+		background: #1f2430;
+		border: 1px solid #2b3242;
+		border-radius: 9px;
+		display: none;
+		align-items: center;
+		justify-content: center;
+		font-weight: 700;
+		color: #3ad17f;
+		white-space: nowrap;
+	}
+	#petWrap {
+		position: absolute;
+		transform-origin: 50% 100%;
+		will-change: transform;
+	}
+	#petImg { display: block; background-repeat: no-repeat; }
+	#tip {
+		position: absolute;
+		line-height: 1;
+		background: #1f2430;
+		border: 1px solid #2b3242;
+		border-radius: 8px;
+		color: #e8c060;
+		display: none;
+		align-items: center;
+		justify-content: center;
+		white-space: nowrap;
+		pointer-events: none;
+	}
+	.float {
+		position: absolute;
+		line-height: 1;
+		color: #3ad17f;
+		font-weight: 700;
+		white-space: nowrap;
+		pointer-events: none;
+		will-change: transform, opacity;
+	}
+</style>
+</head>
+<body>
+	<div id="stage">
+		<div id="panel"></div>
+		<div id="chip"></div>
+		<div id="petWrap"><div id="petImg"></div></div>
+		<div id="tip">困困星人</div>
+	</div>
+	<script src="./renderer.js"></script>
+</body>
+</html>
