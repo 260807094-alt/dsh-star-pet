@@ -45,6 +45,7 @@ const DEFAULT = {
 	show_chip: false,
 	roll_numbers: true,
 	show_float: true,
+	float_every_sec: 5,
 };
 
 let cfg = { ...DEFAULT };
@@ -137,6 +138,7 @@ function build() {
 	look.innerHTML = "";
 	stepper(look, "大小", () => Number(cfg.pet_size_index) || 0, (v) => (cfg.pet_size_index = Math.max(0, Math.min(8, Math.round(v)))), 1, (v) => PET_SIZES[Math.max(0, Math.min(8, Math.round(v)))] + " px");
 	stepper(look, "吸附范围", () => Number(cfg.snap_px) || 0, (v) => (cfg.snap_px = Math.max(0, Math.min(200, Math.round(v)))), 2, (v) => Math.round(v) + " px");
+	stepper(look, "冒钱间隔", () => Number(cfg.float_every_sec) || 5, (v) => (cfg.float_every_sec = Math.max(1, Math.min(10, Math.round(v)))), 1, (v) => Math.round(v) + " 秒");
 
 	const flags = document.getElementById("flags");
 	flags.innerHTML = "";

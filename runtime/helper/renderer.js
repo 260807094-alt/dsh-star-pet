@@ -48,8 +48,12 @@ const SQUISH_E = Array.from({ length: Math.round(1.4 / SQUISH_STEP) + 1 }, (_, i
 const SQUISH_DUR = 220;
 const FLOAT_LIFE = 1400;
 const FLOAT_RISE = 30;
-const FLOAT_EVERY = 11;
-const FLOAT_STEPS = 16;
+const FLOAT_DEFAULT_SEC = 5; // 默认 5 秒一个（可在设置里 1–10 秒调）
+/** 读取「冒钱间隔」：夹到 1–10 秒，缺省 5。 */
+function floatSec() {
+	const v = Math.round(Number(st.cfg && st.cfg.float_every_sec));
+	return Number.isFinite(v) && v >= 1 && v <= 10 ? v : FLOAT_DEFAULT_SEC;
+}
 const WD_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
 // ───────────────────────────── 状态
@@ -396,6 +400,8 @@ function refreshPanel(snap) {
 
 function refreshChip(snap) {
 	const chip = document.getElementById("chip");
+	// 设置里勾上「胶囊」后要立刻出现在头顶（否则要展开再收起一次才显示）
+	if (chip.style.display !== "flex") chip.style.display = "flex";
 	const txt = "¥" + money(snap.earned) + " · " + Math.round(snap.progress * 100) + "%";
 	chip.textContent = txt;
 	const a = st.size;
@@ -463,7 +469,7 @@ function rand(span) {
 }
 
 function spawnFloat(D, snap) {
-	const step = D.perSec * FLOAT_STEPS;
+	const step = D.perSec * floatSec();
 	if (step <= 0) return;
 	const box = st.pet.box;
 	if (!box) return;
@@ -600,14 +606,17 @@ function refresh() {
 
 	if (st.expanded) refreshPanel(snap);
 	else if (st.cfg.show_chip) refreshChip(snap);
+	else document.getElementById("chip").style.display = "none";
 
-	// 飘字节奏（每 250ms 一轮，累计 11 轮冒一个）
-	if (st.cfg.show_float !== false && snap.workday) {
+	// 飘字节奏：只在「搬砖中」冒；间隔取配置（1–10 秒，250ms 一轮），金额 = 这 N 秒赚到的钱
+	if (st.cfg.show_float !== false && snap.phase === "working") {
 		st.floatAcc += 1;
-		if (st.floatAcc >= FLOAT_EVERY) {
+		if (st.floatAcc >= floatSec() * 4) {
 			st.floatAcc = 0;
 			spawnFloat(D, snap);
 		}
+	} else {
+		st.floatAcc = 0;
 	}
 }
 
