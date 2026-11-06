@@ -1,73 +1,73 @@
 {
-	"name": "dsh-star-pet",
-	"version": "1.1.1",
-	"description": "上班鼓励宠物（加班版）：桌面透明置顶的困困星人，实时显示今天已经赚了多少钱，支持加班时段与 0/1.5/2/3/自动 加班倍率。",
-	"icon": "icon.png",
-	"author": "dsh-star-pet",
-	"type": "module",
-	"engines": {
-		"node": "^22.19.0 || >=24.0.0",
-		"dsh": ">=0.2.0-rc.2 || >=0.2.1-rc.2"
-	},
-	"main": "lib/index.js",
-	"exports": {
-		".": {
-			"default": "./lib/index.js"
-		},
-		"./client": "./lib/client.js",
-		"./package.json": "./package.json"
-	},
-	"files": [
-		"icon.png",
-		"lib/client.js",
-		"lib/index.js",
-		"runtime/helper",
-		"assets/skins",
-		"assets/Ruanti.ttf",
-		"assets/click.wav",
-		"assets/done.wav",
-		"cordis.patch.yml",
-		"README.md"
-	],
-	"dsh": {
-		"bundle": {
-			"patch": "./cordis.patch.yml"
-		},
-		"client": {
-			"inject": [
-				"@deepseek-ai/dsh-client-ui-slots"
-			],
-			"platform": "web"
-		},
-		"compatibility": {
-			"dshReleases": {
-				"0.2.0-rc.1": "compatible",
-				"0.2.0-rc.2": "compatible",
-				"0.2.1-rc.2": "compatible",
-				"0.1.7-rc.2": "incompatible"
-			}
-		}
-	},
-	"peerDependencies": {
-		"@deepseek-ai/cordis": "^4.0.4",
-		"react": "^18.3.1",
-		"react-dom": "^18.3.1"
-	},
-	"peerDependenciesMeta": {
-		"react": {
-			"optional": true
-		},
-		"react-dom": {
-			"optional": true
-		}
-	},
-	"keywords": [
-		"deepseek-harness",
-		"dsh",
-		"cordis",
-		"plugin",
-		"desktop-pet",
-		"star-pet"
-	],
-	"license": "MIT"
+  "name": "dsh-star-pet",
+  "version": "1.1.2",
+  "description": "上班鼓励宠物（加班版）：桌面透明置顶的困困星人，实时显示今天已经赚了多少钱，支持加班时段与 0/1.5/2/3/自动 加班倍率。",
+  "icon": "icon.png",
+  "author": "dsh-star-pet",
+  "type": "module",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.0-rc.2 || >=0.2.1-rc.2"
+  },
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "icon.png",
+    "lib/client.js",
+    "lib/index.js",
+    "runtime/helper",
+    "assets/skins",
+    "assets/Ruanti.ttf",
+    "assets/click.wav",
+    "assets/done.wav",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.0-rc.1": "compatible",
+        "0.2.0-rc.2": "compatible",
+        "0.2.1-rc.2": "compatible",
+        "0.1.7-rc.2": "incompatible"
+      }
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "plugin",
+    "desktop-pet",
+    "star-pet"
+  ],
+  "license": "MIT"
 }

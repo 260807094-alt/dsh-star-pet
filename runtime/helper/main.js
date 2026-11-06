@@ -388,6 +388,17 @@ function startVisibilityWatch() {
 	if (visTimer) clearInterval(visTimer);
 	visTimer = setInterval(async () => {
 		if (!pet || pet.isDestroyed()) return;
+		// 兜底：有的情况下渲染进程被回收但没触发 render-process-gone（休眠唤醒后见过），
+		// 所以每轮顺手看一眼 webContents 是否已经崩了。
+		try {
+			if (pet.webContents.isCrashed()) {
+				log("watch: webContents crashed");
+				scheduleRecover("watch-crashed");
+				return;
+			}
+		} catch (e) {
+			/* webContents 已释放 */
+		}
 		try {
 			const st = await request("GET", "/pet/state");
 			if (!st) return;
@@ -524,11 +535,77 @@ async function bootstrap() {
 		pet = null;
 		app.quit();
 	});
-	pet.webContents.on("render-process-gone", (_e, d) => log("renderer gone", JSON.stringify(d)));
+	pet.webContents.on("render-process-gone", (_e, d) => {
+		// 渲染进程可能被系统/GPU 回收（休眠唤醒、驱动重置、OOM），
+		// 主进程和窗口都还在，但窗口里是空的 —— 用户看到的就是"打不开"。
+		// 这里不能只记日志，必须自己把渲染进程拉回来。
+		const reason = (d && d.reason) || "unknown";
+		log("renderer gone", JSON.stringify(d));
+		if (reason === "clean-exit") return;
+		scheduleRecover(reason);
+	});
+	pet.webContents.on("unresponsive", () => {
+		log("renderer unresponsive");
+		scheduleRecover("unresponsive");
+	});
 	pet.webContents.on("console-message", (_e, _lvl, msg, line, src) => log("renderer console:", msg, src + ":" + line));
 	pet.webContents.on("preload-error", (_e, p, err) => log("preload error", p, err && err.message));
 	log("window created");
 	if (process.env.DSH_STAR_PET_OPEN_SETTINGS === "1") setTimeout(() => openSettings(), 900);
+}
+
+// ---------------------------------------------------------------- 自愈
+
+let recoverTimer = null;
+let recoverCount = 0;
+
+/**
+ * 渲染进程没了就重建它。
+ * 前几次直接 reload（快、保留窗口位置与置顶状态）；
+ * 连续失败说明 webContents 本身坏了，只能整窗重建。
+ */
+function scheduleRecover(reason) {
+	if (recoverTimer || !pet || pet.isDestroyed()) return;
+	const delay = Math.min(500 * Math.pow(2, recoverCount), 8000);
+	recoverTimer = setTimeout(async () => {
+		recoverTimer = null;
+		if (!pet || pet.isDestroyed()) return;
+		recoverCount += 1;
+		log("recover attempt", recoverCount, "reason", reason);
+		try {
+			if (recoverCount <= 3) {
+				// reload 在崩溃后的 webContents 上是允许的，会重新起一个渲染进程
+				pet.webContents.reload();
+				await new Promise((r) => setTimeout(r, 1500));
+				if (!pet.isDestroyed() && !pet.webContents.isCrashed()) {
+					log("recover ok via reload");
+					recoverCount = 0;
+					return;
+				}
+			}
+			log("reload did not help, recreating window");
+			const b = pet.getBounds();
+			const old = pet;
+			pet = null;
+			try {
+				old.destroy();
+			} catch (e2) {
+				/* 已经没了 */
+			}
+			await bootstrap();
+			if (pet && !pet.isDestroyed()) {
+				pet.setBounds(b);
+				pet.showInactive();
+				log("recover ok via recreate");
+				recoverCount = 0;
+			}
+		} catch (e) {
+			log("recover failed", (e && e.stack) || String(e));
+			// 兜底：10 秒后再来一次，避免彻底放弃
+			setTimeout(() => scheduleRecover("retry"), 10000);
+		}
+	}, delay);
+	recoverTimer.unref?.();
 }
 
 // ---------------------------------------------------------------- IPC
