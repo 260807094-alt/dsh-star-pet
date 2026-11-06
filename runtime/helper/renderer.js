@@ -333,7 +333,9 @@ function snapshot(D, now) {
 	const otEarned = D.perSec * otRate * otWorked;
 	// 加班窗口压进上班时段的那几分钟已经含在 daily*progress 里了，
 	// 再按倍率算一次就是重复计薪；这里把重叠段按「一倍工资」扣回来。
-	const overlapPay = D.perSec * overlapMin * 60;
+	// 重叠段只在「加班真按倍率发钱」时才需要把基础工资扣回（避免一份时间拿两份钱）。
+	// 倍率=0（白加班）时 otEarned 本来就是 0，重叠段仍应只按基础工资算，不能再扣。
+	const overlapPay = otRate > 0 ? D.perSec * overlapMin * 60 : 0;
 	const rem = monthRemaining(D, now);
 	const remDays = rem.days;
 	// otSpanMin 在上面的加班分支里已经算好（扣过午休），这里不能再声明一次。
@@ -345,7 +347,8 @@ function snapshot(D, now) {
 		earned: Math.max(0, D.daily * progress + otEarned - overlapPay),
 		remaining: Math.max(0, D.netSec - baseWorked),
 		// 加班中：这一栏改成「距离加班结束」，显示加班还剩多久
-		otRemaining: D.otOn && otRate > 0 ? Math.max(0, otSpanMin - otWorked / 60) * 60 : 0,
+		// 倒计时只跟「加班是否正在进行」走，与倍率无关：倍率 0 也是加班，得照常倒数。
+		otRemaining: D.otOn && otDay && otEndMin > otStartMin ? Math.max(0, otSpanMin - otWorked / 60) * 60 : 0,
 		remDays,
 		// 「本月还可赚」拆成两段：基本工资（绿色）+ 本月剩余那些天的加班工资（蓝色）
 		monthBase: rem.base,

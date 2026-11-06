@@ -302,15 +302,19 @@ async function save() {
 		say("下班时间必须晚于上班时间。");
 		return;
 	}
-	const otWs = parse(cfg.overtime_start_weekend, 540);
-	const otWe = parse(cfg.overtime_end_weekend, 1020);
-	if (otWs >= otWe) {
-		say("非上班日加班结束必须晚于开始。");
-		return;
-	}
-	if (parse(cfg.overtime_start_workday, 1140) >= parse(cfg.overtime_end_workday, 1260)) {
-		say("上班日加班结束必须晚于开始。");
-		return;
+	// 加班开关关掉时，加班时段是无关字段，不参与校验（否则用户改了加班时段后关掉加班，
+	// 再改个月薪都会被这条拦下来存不了）。
+	if (cfg.overtime_enabled === true) {
+		const otWs = parse(cfg.overtime_start_weekend, 540);
+		const otWe = parse(cfg.overtime_end_weekend, 1020);
+		if (otWs >= otWe) {
+			say("非上班日加班结束必须晚于开始。");
+			return;
+		}
+		if (parse(cfg.overtime_start_workday, 1140) >= parse(cfg.overtime_end_workday, 1260)) {
+			say("上班日加班结束必须晚于开始。");
+			return;
+		}
 	}
 	try {
 		const r = await S.apply({ ...cfg });
