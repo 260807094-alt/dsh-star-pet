@@ -1,7 +1,7 @@
 /*
  * dsh-star-pet · 右键菜单 / 大小二级面板
  * 与 workpet.py 的 _popup_menu / _popup_sizes 同构：
- *   字体（软萌体/普通）· 大小 · 贴边吸附 · 设置 · 退出
+ *   字体（软萌体/普通）· 大小 · 贴边吸附 · 加班 · 设置 · 退出
  * 选中后立即写回配置，主窗 250ms 轮询会自动跟上。
  */
 const S = window.starPet;
@@ -72,6 +72,12 @@ async function buildMenu() {
 	items.appendChild(
 		itemRow("贴边吸附", cfg.snap_enabled !== false ? "on" : "off", async () => {
 			await S.apply({ snap_enabled: cfg.snap_enabled === false });
+			close();
+		})
+	);
+	items.appendChild(
+		itemRow("加班", cfg.overtime_enabled === true ? "on" : "off", async () => {
+			await S.apply({ overtime_enabled: cfg.overtime_enabled !== true });
 			close();
 		})
 	);

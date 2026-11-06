@@ -337,11 +337,13 @@ function openSettings() {
 			'(async () => { try { await document.fonts.ready; } catch {} const q = (s) => document.querySelector(s); const body = q("#body"); if (!body) return 0; const cs = getComputedStyle(body); const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom); const head = q("#head").getBoundingClientRect().height; const bar = q("#bar").getBoundingClientRect().height; const content = q("#content").scrollHeight; return Math.ceil(head + content + bar + pad + 2 + 8); })()'
 		);
 	try {
-		const tall = Math.min(920, wa.height - 40);
+		// 加班分区让内容变高，原来固定 920 的上限会裁掉底部概览，改成贴着工作区上限
+		const cap = wa.height - 24;
+		const tall = Math.min(cap, wa.height - 24);
 		settings.setBounds({ x: Math.round(wa.x + (wa.width - w) / 2), y: Math.round(wa.y + (wa.height - tall) / 2), width: w, height: tall });
 		await new Promise((r) => setTimeout(r, 220));
 		const need = await measure();
-		const hh = Math.min(Math.max(Math.round(need), 420), wa.height - 40);
+		const hh = Math.min(Math.max(Math.round(need), 420), cap);
 		settings.setBounds({ x: Math.round(wa.x + (wa.width - w) / 2), y: Math.round(wa.y + (wa.height - hh) / 2), width: w, height: hh });
 		log("settings height", hh);
 		await new Promise((r) => setTimeout(r, 120));

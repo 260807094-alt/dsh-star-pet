@@ -46,7 +46,22 @@ const DEFAULT = {
 	roll_numbers: true,
 	show_float: true,
 	float_every_sec: 5,
+	// ── 加班（默认关闭）：工作日「下班后 → 加班到」，周末「开始 → 结束」
+	overtime_enabled: false,
+	overtime_end_workday: "21:00",
+	overtime_start_weekend: "09:00",
+	overtime_end_weekend: "17:00",
+	overtime_rate: "auto",
 };
+
+/** 加班倍率的按钮：值 → 显示文字。auto = 工作日 ×2、周末 ×3。 */
+const RATES = [
+	["0", "0"],
+	["1.5", "1.5"],
+	["2", "2"],
+	["3", "3"],
+	["auto", "自动"],
+];
 
 let cfg = { ...DEFAULT };
 
@@ -134,6 +149,35 @@ function build() {
 		wds.appendChild(b);
 	});
 
+	const ot = document.getElementById("sec-ot");
+	ot.innerHTML = "";
+	// 开关在右键菜单里（默认关闭）；这里只管时段与倍率
+	stepper(ot, "工作日加班开始", () => parse(cfg.overtime_start_workday, 1080), (v) => (cfg.overtime_start_workday = hhmm(v)), 30, hhmm);
+	stepper(ot, "工作日加班结束", () => parse(cfg.overtime_end_workday, 1260), (v) => (cfg.overtime_end_workday = hhmm(v)), 30, hhmm);
+	stepper(ot, "周末加班开始", () => parse(cfg.overtime_start_weekend, 540), (v) => (cfg.overtime_start_weekend = hhmm(v)), 30, hhmm);
+	stepper(ot, "周末加班结束", () => parse(cfg.overtime_end_weekend, 1020), (v) => (cfg.overtime_end_weekend = hhmm(v)), 30, hhmm);
+
+	// 加班倍率：0 / 1.5 / 2 / 3 / 自动，按钮切换（与其它设置一样用点击调整）
+	const rateRow = el("div", "row");
+	rateRow.appendChild(el("div", "lab", "加班倍率"));
+	const rateGrp = el("div", "rates");
+	const paintRate = () => {
+		for (const b of rateGrp.children) b.classList.toggle("on", b.dataset.rate === String(cfg.overtime_rate || "auto"));
+	};
+	for (const [value, text] of RATES) {
+		const b = el("div", "rate", text);
+		b.dataset.rate = value;
+		b.addEventListener("click", () => {
+			cfg.overtime_rate = value;
+			paintRate();
+			overview();
+		});
+		rateGrp.appendChild(b);
+	}
+	rateRow.appendChild(rateGrp);
+	ot.appendChild(rateRow);
+	paintRate();
+
 	const look = document.getElementById("sec-look");
 	look.innerHTML = "";
 	stepper(look, "大小", () => Number(cfg.pet_size_index) || 0, (v) => (cfg.pet_size_index = Math.max(0, Math.min(8, Math.round(v)))), 1, (v) => PET_SIZES[Math.max(0, Math.min(8, Math.round(v)))] + " px");
@@ -161,7 +205,10 @@ function overview() {
 	const start = parse(cfg.work_start, 540);
 	const end = parse(cfg.work_end, 1020);
 	const lunch = Math.max(0, Number(cfg.lunch_minutes) || 0);
-	const paid = Math.max(0, end - start - lunch);
+	const lunchStart = parse(cfg.lunch_start, 690);
+	// 只扣真正落在上下班区间内的午休（与 renderer.js 的 computeState 保持一致）。
+	const lunchOverlap = Math.max(0, Math.min(end, lunchStart + lunch) - Math.max(start, lunchStart));
+	const paid = Math.max(0, end - start - lunchOverlap);
 	const daily = cfg.daily_wage ? Number(cfg.daily_wage) : (Number(cfg.monthly_wage) || 0) / (Number(cfg.pay_days_per_month) || 21.75);
 	const perHour = paid > 0 ? daily / (paid / 60) : 0;
 	const perSec = paid > 0 ? daily / (paid * 60) : 0;
@@ -174,6 +221,24 @@ function overview() {
 		["时薪", "¥" + money(perHour), "#3ad17f"],
 		["每秒", "¥" + perSec.toFixed(4), "#3ad17f"],
 	];
+	// 加班开启时补三行：加班时段 / 加班倍率 / 加班时薪
+	if (cfg.overtime_enabled === true) {
+		const otStartWorkday = parse(cfg.overtime_start_workday, 1080);
+		const otEndWorkday = parse(cfg.overtime_end_workday, 1260);
+		const otStartWeekend = parse(cfg.overtime_start_weekend, 540);
+		const otEndWeekend = parse(cfg.overtime_end_weekend, 1020);
+		const rateKey = String(cfg.overtime_rate || "auto");
+		const rateWork = rateKey === "auto" ? 2 : Math.max(0, Number(rateKey) || 0);
+		const rateRest = rateKey === "auto" ? 3 : Math.max(0, Number(rateKey) || 0);
+		const otWorkMin = Math.max(0, otEndWorkday - otStartWorkday);
+		const otRestMin = Math.max(0, otEndWeekend - otStartWeekend);
+		const rateText = rateKey === "auto" ? "自动" : "×" + rateKey;
+		rows.push(
+			["加班时段", hhmm(otStartWorkday) + "→" + hhmm(otEndWorkday), "#5b9cff"],
+			["加班倍率", rateText + "（" + rateWork + " / " + rateRest + "）", "#5b9cff"],
+			["加班时薪", "¥" + money(perHour * rateWork) + " / ¥" + money(perHour * rateRest), "#3ad17f"]
+		);
+	}
 	for (const [k, v, color] of rows) {
 		box.appendChild(el("div", "k", k));
 		const val = el("div", "v", v);
@@ -189,6 +254,16 @@ function say(text) {
 async function save() {
 	if (parse(cfg.work_start, 540) >= parse(cfg.work_end, 1020)) {
 		say("下班时间必须晚于上班时间。");
+		return;
+	}
+	const otWs = parse(cfg.overtime_start_weekend, 540);
+	const otWe = parse(cfg.overtime_end_weekend, 1020);
+	if (otWs >= otWe) {
+		say("周末加班结束必须晚于开始。");
+		return;
+	}
+	if (parse(cfg.overtime_start_workday, 1080) >= parse(cfg.overtime_end_workday, 1260)) {
+		say("工作日加班结束必须晚于开始。");
 		return;
 	}
 	try {

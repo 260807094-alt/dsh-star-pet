@@ -116,16 +116,37 @@ function computeState(cfg) {
 	const lunchStartMin = cfg.lunch_start ? parseHHMM(cfg.lunch_start, startMin + 150) : startMin + 150;
 	const lunchAfterMin = ((lunchStartMin - startMin) % 1440 + 1440) % 1440;
 	const onSite = Math.max(0, endMin - startMin);
-	const paid = Math.max(0, onSite - lunchMin);
+	// 只扣「真正落在上下班区间内」的午休。之前无条件减 lunchMin，
+	// 一旦午休（如 11:30–13:00）落在上班时段（如 09:00–17:00）之外，
+	// 就会把计薪工时扣成 0 或负数 → perSec = 0 → 看板和飘字永远是 0。
+	const lunchLo = lunchStartMin;
+	const lunchHi = lunchStartMin + lunchMin;
+	const lunchOverlap = Math.max(0, Math.min(endMin, lunchHi) - Math.max(startMin, lunchLo));
+	const paid = Math.max(0, onSite - lunchOverlap);
 	const daily = dailyWage || monthly / payDays;
 	const netSec = paid * 60;
 	const perSec = netSec > 0 ? daily / netSec : 0;
+	// 加班是独立时段：工作日「加班开始 → 加班结束」，周末「开始 → 结束」
+	// 它不接下班时间，也不占用正常工时——两者按各自费率分别累加
+	const otOn = cfg.overtime_enabled === true;
+	const otMode = String(cfg.overtime_rate ?? "auto");
+	const otRateNum = otMode === "auto" ? 0 : Math.max(0, Number(otMode) || 0);
+	const otWorkRate = otMode === "auto" ? 2 : otRateNum;
+	const otRestRate = otMode === "auto" ? 3 : otRateNum;
+	const otStartWorkdayMin = parseHHMM(cfg.overtime_start_workday, 1080);
+	const otEndWorkdayMin = parseHHMM(cfg.overtime_end_workday, 1260);
+	const otStartWeekendMin = parseHHMM(cfg.overtime_start_weekend, 540);
+	const otEndWeekendMin = parseHHMM(cfg.overtime_end_weekend, 1020);
+	const otWorkMin = Math.max(0, otEndWorkdayMin - otStartWorkdayMin);
+	const otRestMin = Math.max(0, otEndWeekendMin - otStartWeekendMin);
 	return {
 		startMin, endMin, lunchMin, lunchStartMin, lunchAfterMin,
 		paidMin: paid, daily, netSec, perSec, perHour: perSec * 3600,
 		weekdays: Array.isArray(cfg.work_weekdays) && cfg.work_weekdays.length ? cfg.work_weekdays.map(Number) : [1, 2, 3, 4, 5],
 		holidays: Array.isArray(cfg.holidays) ? cfg.holidays : [],
 		extra: Array.isArray(cfg.extra_workdays) ? cfg.extra_workdays : [],
+		otOn, otMode, otWorkRate, otRestRate,
+		otStartWorkdayMin, otEndWorkdayMin, otStartWeekendMin, otEndWeekendMin, otWorkMin, otRestMin,
 	};
 }
 
@@ -168,21 +189,51 @@ function snapshot(D, now) {
 	const le = ls + D.lunchMin;
 	let phase = "working";
 	let worked = 0;
-	if (!workday) phase = "rest";
-	else {
+	// 基础工时（不含加班）：只有工作日才计，休息日的基础进度恒为 0
+	let baseWorked = 0;
+	// 加班时段（分钟）：工作日 = 下班后到「加班到」；休息日 = 周末开始到周末结束
+	let otWorked = 0;
+	let otRate = 0;
+	let otStartMin = 0;
+	let otEndMin = 0;
+	if (workday) {
 		if (cur < D.startMin) phase = "before";
 		else if (cur >= ls && cur < le) phase = "lunch";
 		else if (cur >= D.endMin) phase = "after";
 		else phase = "working";
-		worked = workedSeconds(D, now);
+		baseWorked = workedSeconds(D, now);
+		worked = baseWorked;
+		otStartMin = D.otStartWorkdayMin;
+		otEndMin = D.otEndWorkdayMin;
+		otRate = D.otWorkRate;
+	} else {
+		phase = "rest";
+		otStartMin = D.otStartWeekendMin;
+		otEndMin = D.otEndWeekendMin;
+		otRate = D.otRestRate;
 	}
-	const progress = D.netSec > 0 ? Math.max(0, Math.min(1, worked / D.netSec)) : 0;
+	// 加班是独立时段：覆盖到当前时刻就按「窗口内已过时长」计，和正常工时分开累加
+	if (D.otOn && otRate > 0 && otEndMin > otStartMin && cur >= otStartMin) {
+		otWorked = (Math.min(cur, otEndMin) - otStartMin) * 60;
+		worked += otWorked;
+		// 落在加班窗口内 → 阶段显示「加班中」（优先于 搬砖中/今天休息）
+		if (cur < otEndMin) phase = "overtime";
+	}
+	const progress = D.netSec > 0 ? Math.max(0, Math.min(1, baseWorked / D.netSec)) : 0;
+	const otEarned = D.perSec * otRate * otWorked;
 	const remDays = monthRemainingWorkdays(D, now);
+	const otSpanMin = Math.max(0, otEndMin - otStartMin);
 	return {
 		now, workday, phase, worked, progress,
-		earned: D.daily * progress,
-		remaining: Math.max(0, D.netSec - worked),
-		remDays, monthLeft: remDays * D.daily,
+		earned: D.daily * progress + otEarned,
+		remaining: Math.max(0, D.netSec - baseWorked),
+		// 加班中：这一栏改成「距离加班结束」，显示加班还剩多久
+		otRemaining: D.otOn && otRate > 0 ? Math.max(0, otSpanMin - otWorked / 60) * 60 : 0,
+		remDays,
+		// 「本月还可赚」保持原有口径：剩余工作日 × 日薪（不含加班，避免数字虚高）
+		monthLeft: remDays * D.daily,
+		otWorked, otRate, otEarned, otSpanMin,
+		otDaily: otRate > 0 ? D.perSec * otRate * otSpanMin * 60 : 0,
 	};
 }
 
@@ -330,8 +381,10 @@ function buildPanel() {
 	for (const [yy, la, ka, ca, lb, kb, cb] of grid) {
 		mkEl(p, { left: labCx[0] + "px", top: yy + "px", transform: "translate(-50%,-50%)", color: C.DIM, fontSize: FONT.label + "px" }, la);
 		P[ka] = mkEl(p, { left: valCx[0] + "px", top: yy + "px", transform: "translate(-50%,-50%)", color: ca, fontSize: FONT.small + "px" }, "—");
-		mkEl(p, { left: labCx[1] + "px", top: yy + "px", transform: "translate(-50%,-50%)", color: C.DIM, fontSize: FONT.label + "px" }, lb);
+		const labB = mkEl(p, { left: labCx[1] + "px", top: yy + "px", transform: "translate(-50%,-50%)", color: C.DIM, fontSize: FONT.label + "px" }, lb);
 		P[kb] = mkEl(p, { left: valCx[1] + "px", top: yy + "px", transform: "translate(-50%,-50%)", color: cb, fontSize: FONT.small + "px" }, "—");
+		// 第二列的标签在加班时会被换掉（距离下班 → 距离加班结束）
+		if (kb === "remaining") P.remainingLabel = labB;
 	}
 
 	// ⑥ 分隔线
@@ -373,14 +426,17 @@ function refreshPanel(snap) {
 	const moneyTxt = "¥" + money(v);
 	if (P.money.textContent !== moneyTxt) P.money.textContent = moneyTxt;
 
-	const phaseTxt = { working: "搬砖中", lunch: "午休中", before: "还没上班", after: "已收工", rest: "今天休息" }[snap.phase] || "—";
+	const phaseTxt = { working: "搬砖中", lunch: "午休中", before: "还没上班", after: "已收工", rest: "今天休息", overtime: "加班中" }[snap.phase] || "—";
 	const wd = WD_NAMES[(snap.now.getDay() + 6) % 7];
 	P.phase.textContent = phaseTxt + " · " + wd;
 	const clk = String(snap.now.getMonth() + 1).padStart(2, "0") + "-" + String(snap.now.getDate()).padStart(2, "0") + " " + String(snap.now.getHours()).padStart(2, "0") + ":" + String(snap.now.getMinutes()).padStart(2, "0");
 	if (P.clock.textContent !== clk) P.clock.textContent = clk;
 
 	const D = snap.D;
-	const sub = "今日已赚 · 每秒 ¥" + (D.perSec || 0).toFixed(4);
+	const secRate = D.perSec * (snap.phase === "overtime" && snap.otRate > 0 ? snap.otRate : 1);
+	const sub = snap.phase === "overtime"
+		? "加班 ×" + snap.otRate + " · 每秒 ¥" + secRate.toFixed(4)
+		: "今日已赚 · 每秒 ¥" + (D.perSec || 0).toFixed(4);
 	if (P.sub.textContent !== sub) P.sub.textContent = sub;
 
 	const pct = Math.round(snap.progress * 100);
@@ -391,7 +447,14 @@ function refreshPanel(snap) {
 	P.perhour.textContent = "¥" + money(D.perHour);
 	P.daily.textContent = "¥" + money(D.daily);
 	P.worked.textContent = durText(snap.worked);
-	P.remaining.textContent = durText(snap.remaining);
+	// 加班中把「距离下班」改成「距离加班结束」，其余时段保持原样
+	if (snap.phase === "overtime") {
+		if (P.remainingLabel && P.remainingLabel.textContent !== "距离加班结束") P.remainingLabel.textContent = "距离加班结束";
+		P.remaining.textContent = durText(snap.otRemaining);
+	} else {
+		if (P.remainingLabel && P.remainingLabel.textContent !== "距离下班") P.remainingLabel.textContent = "距离下班";
+		P.remaining.textContent = durText(snap.remaining);
+	}
 	P.startat.textContent = fmtHHMM(D.startMin);
 	P.endat.textContent = fmtHHMM(D.endMin);
 	P.remdays.textContent = snap.remDays + " 天";
@@ -469,7 +532,9 @@ function rand(span) {
 }
 
 function spawnFloat(D, snap) {
-	const step = D.perSec * floatSec();
+	// 加班时段按倍率折算，其他时段就是正常每秒收入
+	const rate = snap && snap.phase === "overtime" && snap.otRate > 0 ? snap.otRate : 1;
+	const step = D.perSec * rate * floatSec();
 	if (step <= 0) return;
 	const box = st.pet.box;
 	if (!box) return;
@@ -599,7 +664,8 @@ function refresh() {
 	const snap = snapshot(D, now);
 	snap.D = D;
 
-	const restHidden = !snap.workday && st.cfg.hide_on_rest_day === true;
+	// 休息日隐藏 → 整窗穿透；但加班中要露出来（周末加班也是上班）
+	const restHidden = !snap.workday && st.cfg.hide_on_rest_day === true && snap.phase !== "overtime";
 	document.getElementById("stage").style.opacity = restHidden ? "0" : "1";
 	// 休息日隐藏 → 整窗穿透；否则只在指针不在宠物/面板上时穿透
 	S.ignore(restHidden || !st.pointerInside);
@@ -608,8 +674,8 @@ function refresh() {
 	else if (st.cfg.show_chip) refreshChip(snap);
 	else document.getElementById("chip").style.display = "none";
 
-	// 飘字节奏：只在「搬砖中」冒；间隔取配置（1–10 秒，250ms 一轮），金额 = 这 N 秒赚到的钱
-	if (st.cfg.show_float !== false && snap.phase === "working") {
+	// 飘字节奏：搬砖中或加班中才冒；间隔取配置（1–10 秒，250ms 一轮），金额 = 这 N 秒赚到的钱
+	if (st.cfg.show_float !== false && (snap.phase === "working" || snap.phase === "overtime")) {
 		st.floatAcc += 1;
 		if (st.floatAcc >= floatSec() * 4) {
 			st.floatAcc = 0;

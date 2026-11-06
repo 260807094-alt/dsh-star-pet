@@ -1,7 +1,7 @@
 {
 	"name": "dsh-star-pet",
-	"version": "1.0.2",
-	"description": "上班鼓励宠物「困困星人」：桌面级透明置顶小宠物，实时显示今日已赚、时薪与下班倒计时，可在 DSH 设置里配置。",
+	"version": "1.1.1",
+	"description": "上班鼓励宠物（加班版）：桌面透明置顶的困困星人，实时显示今天已经赚了多少钱，支持加班时段与 0/1.5/2/3/自动 加班倍率。",
 	"icon": "icon.png",
 	"author": "dsh-star-pet",
 	"type": "module",

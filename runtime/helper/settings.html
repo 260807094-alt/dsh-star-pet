@@ -69,15 +69,24 @@
 	}
 	.wd.on { background: #1d3a2b; color: #3ad17f; }
 	.flags { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 6px 0 0; }
+	/* 加班倍率：5 个等宽按钮，选中态与上班日/开关一致 */
+	.rates { display: flex; gap: 3px; }
+	.rate {
+		min-width: 34px; text-align: center; padding: 4px 6px; font-size: 12px;
+		background: #1b212a; color: #7d8798; border-radius: 3px; cursor: default;
+	}
+	.rate.on { background: #1d3a2b; color: #3ad17f; }
+	.note { font-size: 10.667px; line-height: 16px; color: #5d6675; margin: 2px 0 0; }
 	.flag {
 		text-align: center; padding: 4px 2px; font-size: 12px;
 		background: #1b212a; color: #7d8798; border-radius: 3px; cursor: default;
 	}
 	.flag.on { background: #1d3a2b; color: #3ad17f; }
+	/* 概览：两列「标签 值」，标签右对齐、值左对齐，整体居中。窗口内宽只有约 262px，
+	   四列会超出被裁，所以坚持两列，靠减少行数控制高度。 */
 	#ov { display: grid; grid-template-columns: auto auto; gap: 2px 8px; justify-content: center; align-items: baseline; margin: 4px 0 0; }
-	#ov .k { font-size: 12px; line-height: 1.35; color: #7d8798; text-align: right; }
-	#ov .v { line-height: 1.35; }
-	#ov .v { font-size: 13.333px; text-align: left; }
+	#ov .k { font-size: 12px; line-height: 1.35; color: #7d8798; text-align: right; white-space: nowrap; }
+	#ov .v { font-size: 13.333px; line-height: 1.35; text-align: left; white-space: nowrap; }
 	#msg { min-height: 0; margin-top: 6px; font-size: 10.667px; line-height: 17px; color: #ffb74d; white-space: pre-wrap; overflow: hidden; }
 	#bar { display: flex; flex-direction: row-reverse; justify-content: flex-start; gap: 6px; padding-top: 10px; }
 	button {
@@ -105,6 +114,9 @@
 					<div class="rule"></div>
 					<div class="sec-title">上班日</div>
 					<div class="wds" id="wds"></div>
+					<div class="rule"></div>
+					<div class="sec-title">加班</div>
+					<div id="sec-ot"></div>
 					<div class="rule"></div>
 					<div class="sec-title">外观</div>
 					<div id="sec-look"></div>
