@@ -26,7 +26,7 @@ const C = {
 const PAD = 9;
 const GAP = 8;
 const PANEL_W = 344;
-const PANEL_H = 252;
+const PANEL_H = 274;
 const CHIP_H = 27;
 const PET_SIZES = [108, 135, 162, 189, 216, 243, 270, 297, 324];
 
@@ -126,13 +126,18 @@ function computeState(cfg) {
 	const daily = dailyWage || monthly / payDays;
 	const netSec = paid * 60;
 	const perSec = netSec > 0 ? daily / netSec : 0;
-	// 加班是独立时段：工作日「加班开始 → 加班结束」，周末「开始 → 结束」
+	// 加班是独立时段：工作日「加班开始 → 加班结束」，周末/节假日「开始 → 结束」
 	// 它不接下班时间，也不占用正常工时——两者按各自费率分别累加
 	const otOn = cfg.overtime_enabled === true;
-	const otMode = String(cfg.overtime_rate ?? "auto");
-	const otRateNum = otMode === "auto" ? 0 : Math.max(0, Number(otMode) || 0);
-	const otWorkRate = otMode === "auto" ? 2 : otRateNum;
-	const otRestRate = otMode === "auto" ? 3 : otRateNum;
+	// 加班日自己选（1=周一 … 7=周日），与上班日互不影响
+	const otDays = Array.isArray(cfg.overtime_weekdays) && cfg.overtime_weekdays.length
+		? cfg.overtime_weekdays.map(Number)
+		: [1, 2, 3, 4, 5];
+	// 三档倍率：工作日 / 周末 / 节假日，各自独立（0 / 1.5 / 2 / 3）
+	const rateOf = (v) => Math.max(0, Number(v) || 0);
+	const otWorkRate = rateOf(cfg.overtime_rate_workday != null ? cfg.overtime_rate_workday : 1.5);
+	const otRestRate = rateOf(cfg.overtime_rate_weekend != null ? cfg.overtime_rate_weekend : 2);
+	const otHolidayRate = rateOf(cfg.overtime_rate_holiday != null ? cfg.overtime_rate_holiday : 3);
 	const otStartWorkdayMin = parseHHMM(cfg.overtime_start_workday, 1080);
 	const otEndWorkdayMin = parseHHMM(cfg.overtime_end_workday, 1260);
 	const otStartWeekendMin = parseHHMM(cfg.overtime_start_weekend, 540);
@@ -145,7 +150,7 @@ function computeState(cfg) {
 		weekdays: Array.isArray(cfg.work_weekdays) && cfg.work_weekdays.length ? cfg.work_weekdays.map(Number) : [1, 2, 3, 4, 5],
 		holidays: Array.isArray(cfg.holidays) ? cfg.holidays : [],
 		extra: Array.isArray(cfg.extra_workdays) ? cfg.extra_workdays : [],
-		otOn, otMode, otWorkRate, otRestRate,
+		otOn, otDays, otWorkRate, otRestRate, otHolidayRate,
 		otStartWorkdayMin, otEndWorkdayMin, otStartWeekendMin, otEndWeekendMin, otWorkMin, otRestMin,
 	};
 }
@@ -184,6 +189,11 @@ function monthRemainingWorkdays(D, now) {
 }
 function snapshot(D, now) {
 	const workday = isWorkday(D, now);
+	const ds = ymd(now);
+	// 节假日：在 holidays 里且不是额外补班日
+	const isHoliday = D.holidays.includes(ds) && !D.extra.includes(ds);
+	// 今天是加班日吗（加班日自己勾，与上班日互不影响）
+	const otDay = D.otDays.includes(now.getDay() === 0 ? 7 : now.getDay());
 	const cur = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
 	const ls = D.startMin + D.lunchAfterMin;
 	const le = ls + D.lunchMin;
@@ -191,7 +201,7 @@ function snapshot(D, now) {
 	let worked = 0;
 	// 基础工时（不含加班）：只有工作日才计，休息日的基础进度恒为 0
 	let baseWorked = 0;
-	// 加班时段（分钟）：工作日 = 下班后到「加班到」；休息日 = 周末开始到周末结束
+	// 加班时段（分钟）：上班日走「工作日」那一对，非上班日（周末/节假日）走另一对
 	let otWorked = 0;
 	let otRate = 0;
 	let otStartMin = 0;
@@ -210,10 +220,16 @@ function snapshot(D, now) {
 		phase = "rest";
 		otStartMin = D.otStartWeekendMin;
 		otEndMin = D.otEndWeekendMin;
-		otRate = D.otRestRate;
+		// 节假日优先按节假日倍率，其余非上班日按周末倍率
+		otRate = isHoliday ? D.otHolidayRate : D.otRestRate;
+	}
+	if (!otDay) otRate = 0;
+	// 下班之后、加班开始之前：上班族视角这是在休息，单独给一个阶段
+	if (workday && cur >= D.endMin && D.otOn && otDay && otRate > 0 && otStartMin > D.endMin && cur < otStartMin) {
+		phase = "idle";
 	}
 	// 加班是独立时段：覆盖到当前时刻就按「窗口内已过时长」计，和正常工时分开累加
-	if (D.otOn && otRate > 0 && otEndMin > otStartMin && cur >= otStartMin) {
+	if (D.otOn && otDay && otRate > 0 && otEndMin > otStartMin && cur >= otStartMin) {
 		otWorked = (Math.min(cur, otEndMin) - otStartMin) * 60;
 		worked += otWorked;
 		// 落在加班窗口内 → 阶段显示「加班中」（优先于 搬砖中/今天休息）
@@ -377,6 +393,8 @@ function buildPanel() {
 		[124, "时薪", "perhour", C.MONEY, "日薪", "daily", C.MONEY],
 		[146, "已工作", "worked", C.GOLD, "距离下班", "remaining", C.GOLD],
 		[168, "上班", "startat", C.GOLD, "下班", "endat", C.GOLD],
+		// 加班时段与今日倍率：加班关掉时显示「关闭」/「—」
+		[190, "加班", "otspan", C.ACCENT, "倍率", "otrate", C.ACCENT],
 	];
 	for (const [yy, la, ka, ca, lb, kb, cb] of grid) {
 		mkEl(p, { left: labCx[0] + "px", top: yy + "px", transform: "translate(-50%,-50%)", color: C.DIM, fontSize: FONT.label + "px" }, la);
@@ -390,11 +408,11 @@ function buildPanel() {
 	// ⑥ 分隔线
 	const line = document.createElement("div");
 	line.className = "abs";
-	Object.assign(line.style, { left: left + "px", top: "187px", width: right - left + "px", height: "1px", background: C.STROKE });
+	Object.assign(line.style, { left: left + "px", top: "209px", width: right - left + "px", height: "1px", background: C.STROKE });
 	p.appendChild(line);
 
 	// ⑦ 两行通栏（整组居中）
-	for (const [yy, label, key, color] of [[208, "本月剩余工作日", "remdays", C.GOLD], [232, "本月还可赚", "monthleft", C.MONEY]]) {
+	for (const [yy, label, key, color] of [[230, "本月剩余工作日", "remdays", C.GOLD], [254, "本月还可赚", "monthleft", C.MONEY]]) {
 		const row = document.createElement("div");
 		row.className = "abs";
 		Object.assign(row.style, {
@@ -426,7 +444,7 @@ function refreshPanel(snap) {
 	const moneyTxt = "¥" + money(v);
 	if (P.money.textContent !== moneyTxt) P.money.textContent = moneyTxt;
 
-	const phaseTxt = { working: "搬砖中", lunch: "午休中", before: "还没上班", after: "已收工", rest: "今天休息", overtime: "加班中" }[snap.phase] || "—";
+	const phaseTxt = { working: "搬砖中", lunch: "午休中", before: "还没上班", after: "已收工", rest: "今天休息", idle: "休息中", overtime: "加班中" }[snap.phase] || "—";
 	const wd = WD_NAMES[(snap.now.getDay() + 6) % 7];
 	P.phase.textContent = phaseTxt + " · " + wd;
 	const clk = String(snap.now.getMonth() + 1).padStart(2, "0") + "-" + String(snap.now.getDate()).padStart(2, "0") + " " + String(snap.now.getHours()).padStart(2, "0") + ":" + String(snap.now.getMinutes()).padStart(2, "0");
@@ -447,16 +465,29 @@ function refreshPanel(snap) {
 	P.perhour.textContent = "¥" + money(D.perHour);
 	P.daily.textContent = "¥" + money(D.daily);
 	P.worked.textContent = durText(snap.worked);
-	// 加班中把「距离下班」改成「距离加班结束」，其余时段保持原样
+	// 加班中 → 「距离加班结束」；下班到加班开始之间 → 「距离加班」；
+	// 其余时段保持「距离下班」
 	if (snap.phase === "overtime") {
 		if (P.remainingLabel && P.remainingLabel.textContent !== "距离加班结束") P.remainingLabel.textContent = "距离加班结束";
 		P.remaining.textContent = durText(snap.otRemaining);
+	} else if (snap.phase === "idle") {
+		if (P.remainingLabel && P.remainingLabel.textContent !== "距离加班") P.remainingLabel.textContent = "距离加班";
+		const cur = snap.now.getHours() * 60 + snap.now.getMinutes() + snap.now.getSeconds() / 60;
+		P.remaining.textContent = durText(Math.max(0, (D.otStartWorkdayMin - cur) * 60));
 	} else {
 		if (P.remainingLabel && P.remainingLabel.textContent !== "距离下班") P.remainingLabel.textContent = "距离下班";
 		P.remaining.textContent = durText(snap.remaining);
 	}
 	P.startat.textContent = fmtHHMM(D.startMin);
 	P.endat.textContent = fmtHHMM(D.endMin);
+	// 加班时段与今日倍率
+	const otOn = D.otOn && snap.otRate > 0;
+	const a1 = otOn ? fmtHHMM(D.otStartWorkdayMin) : "—";
+	const a2 = otOn ? fmtHHMM(D.otEndWorkdayMin) : "—";
+	const spanTxt = otOn ? a1 + "→" + a2 : "关闭";
+	if (P.otspan.textContent !== spanTxt) P.otspan.textContent = spanTxt;
+	const rateTxt = D.otOn ? (snap.otRate > 0 ? "×" + snap.otRate : "—") : "—";
+	if (P.otrate.textContent !== rateTxt) P.otrate.textContent = rateTxt;
 	P.remdays.textContent = snap.remDays + " 天";
 	P.monthleft.textContent = "¥" + money(snap.monthLeft);
 }

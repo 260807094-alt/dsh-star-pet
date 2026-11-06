@@ -104,7 +104,8 @@ function request(method, urlPath, body) {
 
 const PAD = 9;
 const PANEL_W = 344;
-const PANEL_H = 252;
+// 必须与 renderer.js 的 PANEL_H 一致：加了「加班 / 倍率」一行后从 252 变 274
+const PANEL_H = 274;
 const GAP = 8;
 
 let pet = null;
