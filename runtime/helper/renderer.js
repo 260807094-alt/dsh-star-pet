@@ -138,7 +138,7 @@ function computeState(cfg) {
 	const otWorkRate = rateOf(cfg.overtime_rate_workday != null ? cfg.overtime_rate_workday : 1.5);
 	const otRestRate = rateOf(cfg.overtime_rate_weekend != null ? cfg.overtime_rate_weekend : 2);
 	const otHolidayRate = rateOf(cfg.overtime_rate_holiday != null ? cfg.overtime_rate_holiday : 3);
-	const otStartWorkdayMin = parseHHMM(cfg.overtime_start_workday, 1080);
+	const otStartWorkdayMin = parseHHMM(cfg.overtime_start_workday, 1140);
 	const otEndWorkdayMin = parseHHMM(cfg.overtime_end_workday, 1260);
 	const otStartWeekendMin = parseHHMM(cfg.overtime_start_weekend, 540);
 	const otEndWeekendMin = parseHHMM(cfg.overtime_end_weekend, 1020);
@@ -187,6 +187,63 @@ function monthRemainingWorkdays(D, now) {
 	}
 	return n;
 }
+
+/** 某一天按设置能拿多少加班工资（整天口径，不含「已经过去多少」）。
+ *  上班日走「上班日」那对时段并按工作日倍率；非上班日走另一对，
+ *  节假日倍率优先、否则周末倍率。上班日的午休不算加班。 */
+function overtimePayForDay(D, d) {
+	if (!D.otOn) return 0;
+	const dow = d.getDay() === 0 ? 7 : d.getDay();
+	if (!D.otDays.includes(dow)) return 0;
+	const workday = isWorkday(D, d);
+	const ds = ymd(d);
+	const isHoliday = D.holidays.includes(ds) && !D.extra.includes(ds);
+	let start, end, rate;
+	if (workday) {
+		start = D.otStartWorkdayMin;
+		end = D.otEndWorkdayMin;
+		rate = D.otWorkRate;
+	} else {
+		start = D.otStartWeekendMin;
+		end = D.otEndWeekendMin;
+		rate = isHoliday ? D.otHolidayRate : D.otRestRate;
+	}
+	if (rate <= 0 || end <= start) return 0;
+	// 上班日的午休从加班窗口里剔掉
+	let lunchIn = 0;
+	if (workday) {
+		const ls = D.startMin + D.lunchAfterMin;
+		const le = ls + D.lunchMin;
+		lunchIn = Math.max(0, Math.min(end, le) - Math.max(start, ls));
+	}
+	const spanMin = Math.max(0, end - start - lunchIn);
+	// 与上班时段重叠的那部分基础工资已经算在日薪里，只补倍率差额
+	let overlapMin = 0;
+	if (workday) {
+		const ovLo = Math.max(D.startMin, start);
+		const ovHi = Math.min(D.endMin, end);
+		if (ovHi > ovLo) {
+			const ls = D.startMin + D.lunchAfterMin;
+			const le = ls + D.lunchMin;
+			overlapMin = Math.max(0, ovHi - ovLo - Math.max(0, Math.min(ovHi, le) - Math.max(ovLo, ls)));
+		}
+	}
+	return Math.max(0, D.perSec * rate * spanMin * 60 - D.perSec * overlapMin * 60);
+}
+
+/** 本月剩余（含今天）：基本工资天数/金额 + 这些天按当前设置能拿的加班工资。 */
+function monthRemaining(D, now) {
+	const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+	let days = 0;
+	let ot = 0;
+	const d = new Date(today);
+	while (d.getMonth() === today.getMonth()) {
+		if (isWorkday(D, d)) days += 1;
+		ot += overtimePayForDay(D, d);
+		d.setDate(d.getDate() + 1);
+	}
+	return { days, base: days * D.daily, ot };
+}
 function snapshot(D, now) {
 	const workday = isWorkday(D, now);
 	const ds = ymd(now);
@@ -223,33 +280,90 @@ function snapshot(D, now) {
 		// 节假日优先按节假日倍率，其余非上班日按周末倍率
 		otRate = isHoliday ? D.otHolidayRate : D.otRestRate;
 	}
-	if (!otDay) otRate = 0;
+	// 加班总开关关掉、或今天不是加班日 → 倍率归零（日薪柱、加班行、"距离加班" 全靠它判定）
+	if (!otDay || !D.otOn) otRate = 0;
+	// 时段写反了（结束早于开始）等于没配加班，倍率一并归零，
+	// 否则看板会出现「加班窗 0 小时但倍率 ×1.5」这种自相矛盾的显示
+	if (otEndMin <= otStartMin) otRate = 0;
 	// 下班之后、加班开始之前：上班族视角这是在休息，单独给一个阶段
-	if (workday && cur >= D.endMin && D.otOn && otDay && otRate > 0 && otStartMin > D.endMin && cur < otStartMin) {
+	//（窗口有效就显示"等加班"，不管倍率多少；时段写反则不算）
+	if (workday && cur >= D.endMin && D.otOn && otDay && otEndMin > otStartMin && otStartMin > D.endMin && cur < otStartMin) {
 		phase = "idle";
 	}
 	// 加班是独立时段：覆盖到当前时刻就按「窗口内已过时长」计，和正常工时分开累加
-	if (D.otOn && otDay && otRate > 0 && otEndMin > otStartMin && cur >= otStartMin) {
-		otWorked = (Math.min(cur, otEndMin) - otStartMin) * 60;
-		worked += otWorked;
-		// 落在加班窗口内 → 阶段显示「加班中」（优先于 搬砖中/今天休息）
-		if (cur < otEndMin) phase = "overtime";
+	let overlapMin = 0;
+	let overlapSpanMin = 0;
+	let otSpanMin = 0;
+	if (D.otOn && otDay && otEndMin > otStartMin) {
+		// 上班日的午休不算加班（人得吃饭）；休息日的加班窗口不扣午休。
+		// 上班日把午休从加班窗口里剔掉，否则「11:00–14:00 加班」会把
+		// 11:30–13:00 这 1.5 小时也按加班倍率发钱。
+		const ls2 = D.startMin + D.lunchAfterMin;
+		const le2 = ls2 + D.lunchMin;
+		const lunchIn = (a, b) => (workday ? Math.max(0, Math.min(b, le2) - Math.max(a, ls2)) : 0);
+		// 加班窗口「有效时长」：扣掉落在里面的午休
+		const otEffMin = (upto) => {
+			const lo = otStartMin;
+			const hi = Math.min(upto, otEndMin);
+			if (hi <= lo) return 0;
+			return Math.max(0, hi - lo - lunchIn(lo, hi));
+		};
+		otSpanMin = otEffMin(otEndMin);
+		if (cur >= otStartMin) {
+			otWorked = otEffMin(cur) * 60;
+			worked += otWorked;
+			// 落在加班窗口内 → 阶段显示「加班中」（优先于 搬砖中/今天休息）
+			if (cur < otEndMin) phase = "overtime";
+			// 加班窗口压到正常上班时段时（例如 16:00–20:00），这一段既在基础工时里、
+			// 又按加班倍率算了一遍，等于一份时间拿两份钱。记下重叠的已过时长，
+			// 结算时把重叠段的基础工资扣掉，让每一分钟只按一个费率（加班倍率）。
+			// 只在上��日做这件事：休息日的基础工时恒为 0，没有可扣的重复部分。
+			if (workday) {
+				const ovLo = Math.max(D.startMin, otStartMin);
+				const ovHi = Math.min(D.endMin, otEndMin);
+				if (ovHi > ovLo) {
+					const ovElapsed = Math.max(0, Math.min(cur, ovHi) - ovLo);
+					overlapMin = Math.max(0, ovElapsed - lunchIn(ovLo, ovLo + ovElapsed));
+					overlapSpanMin = Math.max(0, ovHi - ovLo - lunchIn(ovLo, ovHi));
+				}
+			}
+		}
 	}
 	const progress = D.netSec > 0 ? Math.max(0, Math.min(1, baseWorked / D.netSec)) : 0;
 	const otEarned = D.perSec * otRate * otWorked;
-	const remDays = monthRemainingWorkdays(D, now);
-	const otSpanMin = Math.max(0, otEndMin - otStartMin);
+	// 加班窗口压进上班时段的那几分钟已经含在 daily*progress 里了，
+	// 再按倍率算一次就是重复计薪；这里把重叠段按「一倍工资」扣回来。
+	const overlapPay = D.perSec * overlapMin * 60;
+	const rem = monthRemaining(D, now);
+	const remDays = rem.days;
+	// otSpanMin 在上面的加班分支里已经算好（扣过午休），这里不能再声明一次。
 	return {
-		now, workday, phase, worked, progress,
-		earned: D.daily * progress + otEarned,
+		now, workday, phase,
+		// 重叠段在 baseWorked 与 otWorked 里各算了一次，显示「已工作」时只能算一次
+		worked: Math.max(0, worked - overlapMin * 60),
+		progress,
+		earned: Math.max(0, D.daily * progress + otEarned - overlapPay),
 		remaining: Math.max(0, D.netSec - baseWorked),
 		// 加班中：这一栏改成「距离加班结束」，显示加班还剩多久
 		otRemaining: D.otOn && otRate > 0 ? Math.max(0, otSpanMin - otWorked / 60) * 60 : 0,
 		remDays,
-		// 「本月还可赚」保持原有口径：剩余工作日 × 日薪（不含加班，避免数字虚高）
-		monthLeft: remDays * D.daily,
+		// 「本月还可赚」拆成两段：基本工资（绿色）+ 本月剩余那些天的加班工资（蓝色）
+		monthBase: rem.base,
+		monthOt: rem.ot,
+		monthLeft: rem.base + rem.ot,
+		// 彩蛋：开着加班，但三档加班倍率全是 0（工作日/周末/节假日）——
+		// 三档都设成 0 就是"白加班"，不管实际本月加班费算出来是多少
+		otAllZero: D.otOn && D.otWorkRate <= 0 && D.otRestRate <= 0 && D.otHolidayRate <= 0,
 		otWorked, otRate, otEarned, otSpanMin,
-		otDaily: otRate > 0 ? D.perSec * otRate * otSpanMin * 60 : 0,
+		// 今天实际生效的那一对加班时段（工作日走上班日那对，非上班日走另一对），
+		// 看板上的「加班 18:00→21:00」必须显示今天真正在用的这一对
+		otStartMin, otEndMin,
+		// 今日加班工资（按整天加班窗口算，不含已过去多少）：
+		// 加班窗口整段按倍率算，再扣掉与上班时段重叠的那部分（那部分已在日薪里，
+		// 不能一份时间算两份钱）。
+		otDaily: otRate > 0 ? Math.max(0, D.perSec * otRate * otSpanMin * 60 - D.perSec * overlapSpanMin * 60) : 0,
+		// 日薪柱显示的「今日总额」：上班给一天日薪，加班另加今日加班工资
+		dailyTotal: (workday ? D.daily : 0) + (otRate > 0 ? Math.max(0, D.perSec * otRate * otSpanMin * 60 - D.perSec * overlapSpanMin * 60) : 0),
 	};
 }
 
@@ -393,8 +507,8 @@ function buildPanel() {
 		[124, "时薪", "perhour", C.MONEY, "日薪", "daily", C.MONEY],
 		[146, "已工作", "worked", C.GOLD, "距离下班", "remaining", C.GOLD],
 		[168, "上班", "startat", C.GOLD, "下班", "endat", C.GOLD],
-		// 加班时段与今日倍率：加班关掉时显示「关闭」/「—」
-		[190, "加班", "otspan", C.ACCENT, "倍率", "otrate", C.ACCENT],
+		// 加班时段与窝囊费：加班关掉时显示「关闭」/「—」
+		[190, "加班", "otspan", C.ACCENT, "窝囊费", "otrate", C.ACCENT],
 	];
 	for (const [yy, la, ka, ca, lb, kb, cb] of grid) {
 		mkEl(p, { left: labCx[0] + "px", top: yy + "px", transform: "translate(-50%,-50%)", color: C.DIM, fontSize: FONT.label + "px" }, la);
@@ -426,6 +540,15 @@ function buildPanel() {
 		val.textContent = "—";
 		Object.assign(val.style, { color, fontSize: FONT.small + "px" });
 		row.append(lab, val);
+		// 「本月还可赚」要做成「基本工资（绿）+ 加班工资（蓝）」两段，
+		// 再挂一个不占位的第二个 span，颜色单独设
+		if (key === "monthleft") {
+			const ot = document.createElement("span");
+			ot.textContent = "";
+			Object.assign(ot.style, { color: C.ACCENT, fontSize: FONT.small + "px", marginLeft: "-4px" });
+			row.appendChild(ot);
+			P.monthleftOt = ot;
+		}
 		p.appendChild(row);
 		P[key] = val;
 	}
@@ -463,7 +586,10 @@ function refreshPanel(snap) {
 	P.barFill.style.width = wpx + "px";
 
 	P.perhour.textContent = "¥" + money(D.perHour);
-	P.daily.textContent = "¥" + money(D.daily);
+	// 日薪保持常规排版（不拆两段）：只有「日薪」这一格文字长度正常，
+	// 拆成 505.75+350.13 会顶到左边标签上，用户明确要求保持原样。
+	// 日薪一栏：开了加班就把今天的加班工资加进去，显示「今天这一天总共能拿多少」
+	P.daily.textContent = "¥" + money(snap.dailyTotal);
 	P.worked.textContent = durText(snap.worked);
 	// 加班中 → 「距离加班结束」；下班到加班开始之间 → 「距离加班」；
 	// 其余时段保持「距离下班」
@@ -473,23 +599,42 @@ function refreshPanel(snap) {
 	} else if (snap.phase === "idle") {
 		if (P.remainingLabel && P.remainingLabel.textContent !== "距离加班") P.remainingLabel.textContent = "距离加班";
 		const cur = snap.now.getHours() * 60 + snap.now.getMinutes() + snap.now.getSeconds() / 60;
-		P.remaining.textContent = durText(Math.max(0, (D.otStartWorkdayMin - cur) * 60));
+		P.remaining.textContent = durText(Math.max(0, (snap.otStartMin - cur) * 60));
 	} else {
 		if (P.remainingLabel && P.remainingLabel.textContent !== "距离下班") P.remainingLabel.textContent = "距离下班";
 		P.remaining.textContent = durText(snap.remaining);
 	}
 	P.startat.textContent = fmtHHMM(D.startMin);
 	P.endat.textContent = fmtHHMM(D.endMin);
-	// 加班时段与今日倍率
-	const otOn = D.otOn && snap.otRate > 0;
-	const a1 = otOn ? fmtHHMM(D.otStartWorkdayMin) : "—";
-	const a2 = otOn ? fmtHHMM(D.otEndWorkdayMin) : "—";
-	const spanTxt = otOn ? a1 + "→" + a2 : "关闭";
+	// 加班时段 + 窝囊费：窝囊费就是今天的加班工资（加班多受的那份气换来的钱）。
+	// 不加班就是 0。和上面的「日薪」（基础日薪 + 加班工资）一对看，
+	// 日薪 − 窝囊费 = 不含加班的基础日薪。
+	// 时段显示：只要加班开着且窗口有效就显示时间（倍率 0 也显示，否则"加班中"却"关闭"矛盾）
+	const otWinOn = D.otOn && snap.otEndMin > snap.otStartMin;
+	const a1 = otWinOn ? fmtHHMM(snap.otStartMin) : "—";
+	const a2 = otWinOn ? fmtHHMM(snap.otEndMin) : "—";
+	const spanTxt = otWinOn ? a1 + "→" + a2 : "关闭";
 	if (P.otspan.textContent !== spanTxt) P.otspan.textContent = spanTxt;
-	const rateTxt = D.otOn ? (snap.otRate > 0 ? "×" + snap.otRate : "—") : "—";
-	if (P.otrate.textContent !== rateTxt) P.otrate.textContent = rateTxt;
+	const pouchTxt = "¥" + money(snap.otDaily);
+	if (P.otrate.textContent !== pouchTxt) P.otrate.textContent = pouchTxt;
 	P.remdays.textContent = snap.remDays + " 天";
-	P.monthleft.textContent = "¥" + money(snap.monthLeft);
+	// 「本月还可赚」= 基本工资（绿）+ 加班工资（蓝）。
+	// 加班工资是把本月剩余每一天按当前设置单独算一遍再加总
+	//（工作日/周末/节假日倍率不同，加班日也不一定等于上班日）。
+	// 加班关掉或本月剩余没有加班时，蓝色段不显示，只留绿色基本工资。
+	P.monthleft.textContent = "¥" + money(snap.monthBase);
+	if (P.monthleftOt) {
+		// 彩蛋：开了加班却三档倍率全 0，加班一分钱不给 → 蓝色段显示「+ 0 (太窝囊了)」
+		const otTxt = snap.otAllZero
+			? "+ 0 (太窝囊了)"
+			: snap.monthOt > 0.005
+				? "+¥" + money(snap.monthOt)
+				: "";
+		if (P.monthleftOt.textContent !== otTxt) P.monthleftOt.textContent = otTxt;
+		// 彩蛋状态用更暗的蓝灰，像是在自嘲，而不是正常的收入高亮
+		const otColor = snap.otAllZero ? "#6b7488" : C.ACCENT;
+		if (P.monthleftOt.style.color !== otColor) P.monthleftOt.style.color = otColor;
+	}
 }
 
 function refreshChip(snap) {

@@ -50,7 +50,7 @@ const DEFAULT = {
 	// 加班日与上班日一样一周七天自己勾
 	overtime_enabled: false,
 	overtime_weekdays: [1, 2, 3, 4, 5],
-	overtime_start_workday: "18:00",
+	overtime_start_workday: "19:00",
 	overtime_end_workday: "21:00",
 	overtime_start_weekend: "09:00",
 	overtime_end_weekend: "17:00",
@@ -182,7 +182,7 @@ function build() {
 	});
 	ot.appendChild(otDaysWrap);
 
-	stepper(ot, "上班日加班开始", () => parse(cfg.overtime_start_workday, 1080), (v) => (cfg.overtime_start_workday = hhmm(v)), 30, hhmm);
+	stepper(ot, "上班日加班开始", () => parse(cfg.overtime_start_workday, 1140), (v) => (cfg.overtime_start_workday = hhmm(v)), 30, hhmm);
 	stepper(ot, "上班日加班结束", () => parse(cfg.overtime_end_workday, 1260), (v) => (cfg.overtime_end_workday = hhmm(v)), 30, hhmm);
 	stepper(ot, "非上班日加班开始", () => parse(cfg.overtime_start_weekend, 540), (v) => (cfg.overtime_start_weekend = hhmm(v)), 30, hhmm);
 	stepper(ot, "非上班日加班结束", () => parse(cfg.overtime_end_weekend, 1020), (v) => (cfg.overtime_end_weekend = hhmm(v)), 30, hhmm);
@@ -255,7 +255,7 @@ function overview() {
 	// 加班开启时补两行：加班时段 / 今日加班时薪
 	// （不再列倍率——三档倍率在「加班」分区里已经各自选好了）
 	if (cfg.overtime_enabled === true) {
-		const otStartWorkday = parse(cfg.overtime_start_workday, 1080);
+		const otStartWorkday = parse(cfg.overtime_start_workday, 1140);
 		const otEndWorkday = parse(cfg.overtime_end_workday, 1260);
 		const otStartWeekend = parse(cfg.overtime_start_weekend, 540);
 		const otEndWeekend = parse(cfg.overtime_end_weekend, 1020);
@@ -277,9 +277,12 @@ function overview() {
 		const todayRate = Math.max(0, Number(cfg[rateKey]) || 0);
 		const spanFrom = workdayToday ? otStartWorkday : otStartWeekend;
 		const spanTo = workdayToday ? otEndWorkday : otEndWeekend;
+		// 今天是不是加班日（和上班日各自独立选）
+		const oset = new Set((cfg.overtime_weekdays || [1, 2, 3, 4, 5]).map(Number));
+		const otDayToday = oset.has(dow);
 		rows.push(
-			["加班时段", hhmm(spanFrom) + "→" + hhmm(spanTo), "#5b9cff"],
-			["加班时薪", "¥" + money(perHour * todayRate), "#3ad17f"]
+			["加班时段", otDayToday ? hhmm(spanFrom) + "→" + hhmm(spanTo) : "今日不加班", "#5b9cff"],
+			["加班时薪", otDayToday ? "¥" + money(perHour * todayRate) : "—", "#3ad17f"]
 		);
 	}
 	for (const [k, v, color] of rows) {
@@ -305,7 +308,7 @@ async function save() {
 		say("非上班日加班结束必须晚于开始。");
 		return;
 	}
-	if (parse(cfg.overtime_start_workday, 1080) >= parse(cfg.overtime_end_workday, 1260)) {
+	if (parse(cfg.overtime_start_workday, 1140) >= parse(cfg.overtime_end_workday, 1260)) {
 		say("上班日加班结束必须晚于开始。");
 		return;
 	}
