@@ -574,7 +574,7 @@ function refreshPanel(snap) {
 	if (P.clock.textContent !== clk) P.clock.textContent = clk;
 
 	const D = snap.D;
-	const secRate = D.perSec * (snap.phase === "overtime" && snap.otRate > 0 ? snap.otRate : 1);
+	const secRate = D.perSec * (snap.phase === "overtime" ? snap.otRate : 1);
 	const sub = snap.phase === "overtime"
 		? "加班 ×" + snap.otRate + " · 每秒 ¥" + secRate.toFixed(4)
 		: "今日已赚 · 每秒 ¥" + (D.perSec || 0).toFixed(4);
@@ -708,8 +708,8 @@ function rand(span) {
 }
 
 function spawnFloat(D, snap) {
-	// 加班时段按倍率折算，其他时段就是正常每秒收入
-	const rate = snap && snap.phase === "overtime" && snap.otRate > 0 ? snap.otRate : 1;
+	// 加班时段按倍率折算（0 倍率 = 0 元），其他时段就是正常每秒收入
+	const rate = snap && snap.phase === "overtime" ? snap.otRate : 1;
 	const step = D.perSec * rate * floatSec();
 	if (step <= 0) return;
 	const box = st.pet.box;
