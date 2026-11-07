@@ -29,7 +29,7 @@
 		background: #15191f;
 		border-radius: 9px;
 		display: flex; flex-direction: column;
-		padding: 16px 22px;
+		padding: 16px 30px;
 	}
 	/* 只有顶部标题条可以拖窗（与 Tk 的 head/title 绑定一致），其余区域保持可交互 */
 	#head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;
@@ -58,6 +58,8 @@
 		cursor: default; border-radius: 3px;
 	}
 	.sbtn:hover { background: #24303f; color: #e9eef8; }
+	.sbtn.disabled { background: #15191f; color: #3a4350; }
+	.sbtn.disabled:hover { background: #15191f; color: #3a4350; }
 	.val {
 		width: 96px; text-align: center; padding: 4px 2px;
 		font-size: 13.333px; color: #e9eef8;
@@ -68,6 +70,7 @@
 		background: #1b212a; color: #7d8798; border-radius: 3px; cursor: default;
 	}
 	.wd.on { background: #1d3a2b; color: #3ad17f; }
+	.wd.disabled { background: #15191f; color: #3a4350; }
 	.flags { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 6px 0 0; }
 	/* 加班倍率：5 个等宽按钮，选中态与上班日/开关一致 */
 	.rates { display: flex; gap: 3px; }

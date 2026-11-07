@@ -28,7 +28,7 @@ const GAP = 8;
 const PANEL_W = 344;
 const PANEL_H = 274;
 const CHIP_H = 27;
-const PET_SIZES = [108, 135, 162, 189, 216, 243, 270, 297, 324];
+const PET_SIZES = [96, 108, 135];
 
 // 字体：Tk 的点值 → CSS px（1pt = 96/72 px）
 const FONT = {
@@ -54,7 +54,34 @@ function floatSec() {
 	const v = Math.round(Number(st.cfg && st.cfg.float_every_sec));
 	return Number.isFinite(v) && v >= 1 && v <= 10 ? v : FLOAT_DEFAULT_SEC;
 }
+/** 读取「吐槽间隔」：夹到 5–120 秒，缺省 30。 */
+function banterEverySec() {
+	const v = Math.round(Number(st.cfg && st.cfg.banter_every_sec));
+	return Number.isFinite(v) && v >= BANTER_MIN_SEC && v <= BANTER_MAX_SEC ? v : BANTER_DEFAULT_SEC;
+}
 const WD_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+
+// ── 吐槽（banter）：气泡从宠物头顶冒出、像冒钱一样上飘渐隐。
+// 语句由宿主 /banter 下发（读用户配置目录里的 banter.txt），读不到时用这里的默认值兜底。
+const BANTER_MIN_SEC = 5;      // 吐槽间隔下限（秒）
+const BANTER_MAX_SEC = 120;    // 吐槽间隔上限（秒）
+const BANTER_DEFAULT_SEC = 30; // 默认 30 秒随机出一条
+const BANTER_LIFE = 3600;      // 气泡存活 ms（比冒钱久，够读完一句话）
+const BANTER_RISE = 46;        // 上飘距离 px
+const BANTER_MAX_W = 260;      // 气泡最大宽度 px（更大更可爱）
+const BANTER_FONT = 14;        // 气泡字号 px
+const DEFAULT_BANTER = {
+	normal: [
+		"歇一会吧", "天塌了...", "再睡五分钟...", "啊？我吗？",
+		"好焦虑...怎么办", "人就不能躺一辈子吗...", "我精神好得很！", "休息一会...睡了",
+		"好虚...好累", "那咋了", "然后呢，我能咋办", "biubiu你~",
+		"虽然什么都没干，但还是辛苦我了", "要不问问AI？", "我最棒！", "记得喝水！",
+	],
+	before: [
+		"明天的事交给明天的自己去处理吧！", "事已至此，先吃饭吧！",
+		"等会下班吃什么？", "今晚去哪玩？", "突然不困了~",
+	],
+};
 
 // ───────────────────────────── 状态
 const st = {
@@ -76,6 +103,9 @@ const st = {
 	pointerInside: false,
 	dragging: null, // {x, y, moved}
 	lastSnap: null,
+	banter: { normal: [], before: [] },
+	banterAcc: 0,
+	banters: [],
 };
 
 // ───────────────────────────── 派生量（对照 config_to_state / Snap）
@@ -160,8 +190,9 @@ function ymd(d) {
 }
 function isWorkday(D, d) {
 	const ds = ymd(d);
-	if (D.holidays.includes(ds)) return false;
+	// 补班日优先：即使同时是周末/节假日也强制上班；否则节假日放假。
 	if (D.extra.includes(ds)) return true;
+	if (D.holidays.includes(ds)) return false;
 	return D.weekdays.includes(d.getDay() === 0 ? 7 : d.getDay());
 }
 function workedSeconds(D, now) {
@@ -209,26 +240,21 @@ function overtimePayForDay(D, d) {
 		rate = isHoliday ? D.otHolidayRate : D.otRestRate;
 	}
 	if (rate <= 0 || end <= start) return 0;
-	// 上班日的午休从加班窗口里剔掉
-	let lunchIn = 0;
-	if (workday) {
-		const ls = D.startMin + D.lunchAfterMin;
-		const le = ls + D.lunchMin;
-		lunchIn = Math.max(0, Math.min(end, le) - Math.max(start, ls));
-	}
+	// 午休从加班窗口里剔掉（无论上班日还是休息日，午休都不算钱）
+	const ls = D.startMin + D.lunchAfterMin;
+	const le = ls + D.lunchMin;
+	const lunchIn = Math.max(0, Math.min(end, le) - Math.max(start, ls));
 	const spanMin = Math.max(0, end - start - lunchIn);
-	// 与上班时段重叠的那部分基础工资已经算在日薪里，只补倍率差额
+	// 与上班时段重叠的那部分基础工资已经算在日薪里，只补倍率差额（只有上班日才有重叠）
 	let overlapMin = 0;
 	if (workday) {
 		const ovLo = Math.max(D.startMin, start);
 		const ovHi = Math.min(D.endMin, end);
 		if (ovHi > ovLo) {
-			const ls = D.startMin + D.lunchAfterMin;
-			const le = ls + D.lunchMin;
 			overlapMin = Math.max(0, ovHi - ovLo - Math.max(0, Math.min(ovHi, le) - Math.max(ovLo, ls)));
 		}
 	}
-	return Math.max(0, D.perSec * rate * spanMin * 60 - D.perSec * overlapMin * 60);
+	return Math.max(0, D.perSec * Math.max(0, rate - 1) * Math.max(0, spanMin - overlapMin) * 60);
 }
 
 /** 本月剩余（含今天）：基本工资天数/金额 + 这些天按当前设置能拿的加班工资。 */
@@ -265,7 +291,7 @@ function snapshot(D, now) {
 	let otEndMin = 0;
 	if (workday) {
 		if (cur < D.startMin) phase = "before";
-		else if (cur >= ls && cur < le) phase = "lunch";
+		else if (cur >= ls && cur < le && cur < D.endMin) phase = "lunch";
 		else if (cur >= D.endMin) phase = "after";
 		else phase = "working";
 		baseWorked = workedSeconds(D, now);
@@ -300,7 +326,7 @@ function snapshot(D, now) {
 		// 11:30–13:00 这 1.5 小时也按加班倍率发钱。
 		const ls2 = D.startMin + D.lunchAfterMin;
 		const le2 = ls2 + D.lunchMin;
-		const lunchIn = (a, b) => (workday ? Math.max(0, Math.min(b, le2) - Math.max(a, ls2)) : 0);
+		const lunchIn = (a, b) => Math.max(0, Math.min(b, le2) - Math.max(a, ls2));
 		// 加班窗口「有效时长」：扣掉落在里面的午休
 		const otEffMin = (upto) => {
 			const lo = otStartMin;
@@ -312,8 +338,13 @@ function snapshot(D, now) {
 		if (cur >= otStartMin) {
 			otWorked = otEffMin(cur) * 60;
 			worked += otWorked;
-			// 落在加班窗口内 → 阶段显示「加班中」（优先于 搬砖中/今天休息）
-			if (cur < otEndMin) phase = "overtime";
+			// 落在加班窗口内 → 阶段显示「加班中」（优先于 搬砖中/今天休息）。
+			// 但上班日的午休落在加班窗口内时不算加班（人得吃饭），保持「午休中」，
+			// 否则午休那 1.5 小时会一边显示「加班中」一边按加班倍率冒钱、金额却卡着不涨。
+			if (cur < otEndMin) {
+				const inLunch = workday && cur >= ls2 && cur < le2;
+				phase = inLunch ? "lunch" : "overtime";
+			}
 			// 加班窗口压到正常上班时段时（例如 16:00–20:00），这一段既在基础工时里、
 			// 又按加班倍率算了一遍，等于一份时间拿两份钱。记下重叠的已过时长，
 			// 结算时把重叠段的基础工资扣掉，让每一分钟只按一个费率（加班倍率）。
@@ -361,12 +392,14 @@ function snapshot(D, now) {
 		// 今天实际生效的那一对加班时段（工作日走上班日那对，非上班日走另一对），
 		// 看板上的「加班 18:00→21:00」必须显示今天真正在用的这一对
 		otStartMin, otEndMin,
-		// 今日加班工资（按整天加班窗口算，不含已过去多少）：
-		// 加班窗口整段按倍率算，再扣掉与上班时段重叠的那部分（那部分已在日薪里，
-		// 不能一份时间算两份钱）。
-		otDaily: otRate > 0 ? Math.max(0, D.perSec * otRate * otSpanMin * 60 - D.perSec * overlapSpanMin * 60) : 0,
-		// 日薪柱显示的「今日总额」：上班给一天日薪，加班另加今日加班工资
-		dailyTotal: (workday ? D.daily : 0) + (otRate > 0 ? Math.max(0, D.perSec * otRate * otSpanMin * 60 - D.perSec * overlapSpanMin * 60) : 0),
+		// 今日加班费（差价口径）：只算「多赚的部分」= 每秒 × (倍率−1) × 有效加班秒数，
+		// 与设置页概览的蓝色差价完全一致。与上班时段重叠的那部分基础工资已含在
+		// 「日薪」里，这里不再按差价重复计入（重叠段从有效时长里剔除）。
+		otDaily: otRate > 0 ? Math.max(0, D.perSec * Math.max(0, otRate - 1) * Math.max(0, otSpanMin - overlapSpanMin) * 60) : 0,
+		// 日薪柱只显示「基本日薪」（绿色，与设置页概览的绿色基本薪资一致）。
+		// 只要这天有工资（上班日，或选了加班的周末/节假日），日薪都显示基本日薪，
+		// 加班赚的钱另看「窝囊费」这一格，两者分开，不再叠加。
+		dailyTotal: D.daily,
 	};
 }
 
@@ -751,6 +784,90 @@ function tickFloats(dt) {
 	st.floats = alive;
 }
 
+// ───────────────────────────── 吐槽气泡
+async function loadBanter() {
+	try {
+		const r = await S.req("GET", "/banter");
+		if (r && Array.isArray(r.normal) && r.normal.length) st.banter.normal = r.normal;
+		if (r && Array.isArray(r.before)) st.banter.before = r.before;
+	} catch (e) {
+		/* 宿主没有 /banter（旧版/独立版兜底）→ 用内置默认 */
+	}
+	if (!st.banter.normal.length) st.banter.normal = DEFAULT_BANTER.normal.slice();
+}
+
+/** 距离「下班」或「加班结束」还有 60 分钟内 → 用「下班前」那组。 */
+function banterBeforeOffWork(D, now) {
+	const cur = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+	const workday = isWorkday(D, now);
+	const dow = now.getDay() === 0 ? 7 : now.getDay();
+	const otDay = D.otDays.includes(dow);
+	if (workday && cur >= D.endMin - 60 && cur < D.endMin) return true;
+	if (D.otOn && otDay) {
+		const s = workday ? D.otStartWorkdayMin : D.otStartWeekendMin;
+		const e = workday ? D.otEndWorkdayMin : D.otEndWeekendMin;
+		if (e > s && cur >= e - 60 && cur < e) return true;
+	}
+	return false;
+}
+
+function pickBanterLine() {
+	const now = new Date();
+	let pool = st.banter.normal.length ? st.banter.normal : DEFAULT_BANTER.normal;
+	if (banterBeforeOffWork(D, now) && st.banter.before.length) pool = st.banter.before;
+	if (!pool.length) return "……";
+	return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function spawnBanter() {
+	const box = st.pet.box;
+	if (!box) return;
+	const cx = (box[0] + box[2]) / 2;
+	// 从宠物「头部侧面」冒出来（说话泡泡），不是头顶正上方：头部约在宠物顶部 20% 处
+	const headY = box[1] + box[3] - box[1] > 0 ? box[1] + (box[3] - box[1]) * 0.2 : box[1];
+	const el = document.createElement("div");
+	el.className = "banter";
+	el.textContent = pickBanterLine();
+	// 气泡固定用 108 档的尺寸（不再随星星人大小缩放）：
+	// 108 档下气泡单行完整显示在窗口内不被裁切。
+	const scale = 108 / 135;
+	el.style.setProperty("--bt-scale", String(scale));
+	el.style.fontSize = Math.round(BANTER_FONT * scale) + "px";
+	el.style.fontFamily = st.soft ? FAMILY_SOFT : FAMILY_PLAIN;
+	el.style.maxWidth = "none";           // 单行不换行，宽度由文字长度决定
+	document.getElementById("stage").appendChild(el);
+	const bw = el.offsetWidth;
+	const bh = el.offsetHeight;
+	// 锚点侧固定：贴宠物那一侧永不脱锚，字越多向远离宠物方向延伸越长。
+	// 宠物在窗口右半边 → 气泡在它左边，右端贴宠物左边缘向左延伸（锚点=最后一个字）；
+	// 宠物在左半边 → 气泡在它右边，左端贴宠物右边缘向右延伸（锚点=第一个字）。
+	const gap = Math.round(6 * scale);
+	const petOnRight = (box[0] + box[2]) / 2 > st.winW / 2;
+	let x = petOnRight ? box[0] - gap - bw : box[2] + gap;
+	let y = headY - bh / 2;
+	// 不做任何 clamp：锚点侧由上面公式固定，远离侧随文字自然延伸（短句短、长句长）。
+	y = Math.max(2, Math.min(y, st.winH - bh - 2));
+	el.style.left = x + "px";
+	el.style.top = y + "px";
+	st.banters.push({ el, x, y, ms: 0 });
+}
+
+function tickBanters(dt) {
+	const alive = [];
+	for (const b of st.banters) {
+		b.ms += dt;
+		if (b.ms > BANTER_LIFE) {
+			b.el.remove();
+			continue;
+		}
+		const p = b.ms / BANTER_LIFE;
+		// 气泡不动，只做逐渐消失
+		if (p > 0.7) b.el.style.opacity = String(Math.max(0, 1 - (p - 0.7) / 0.3));
+		alive.push(b);
+	}
+	st.banters = alive;
+}
+
 // ───────────────────────────── 悬停提示
 function moveTip(e) {
 	const tip = document.getElementById("tip");
@@ -833,6 +950,7 @@ function tick(now) {
 	lastTick = now;
 	tickSquish(now);
 	tickFloats(dt);
+	tickBanters(dt);
 	requestAnimationFrame(tick);
 }
 
@@ -862,6 +980,21 @@ function refresh() {
 		}
 	} else {
 		st.floatAcc = 0;
+	}
+
+	// 吐槽：默认只在「上班/加班」时冒（banter_mode === "workday"）；「全天」则只要可见就冒。
+	// 「下班前」那组由 banterBeforeOffWork 按时间自动切换。
+	const banterMode = st.cfg.banter_mode || "workday";
+	const banterAllowed = st.cfg.show_banter !== false && !restHidden &&
+		(banterMode === "allday" || snap.phase === "working" || snap.phase === "overtime");
+	if (banterAllowed) {
+		st.banterAcc += 1;
+		if (st.banterAcc >= banterEverySec() * 4) {
+			st.banterAcc = 0;
+			spawnBanter();
+		}
+	} else {
+		st.banterAcc = 0;
 	}
 }
 
@@ -976,6 +1109,8 @@ S.boot(async (payload) => {
 	S.resize(st.size);
 	document.getElementById("chip").style.display = cfg.show_chip ? "flex" : "none";
 	setExpanded(false);
+	loadBanter();
+	setInterval(loadBanter, 30000); // 每 30 秒重读 banter.txt，改文件无需重启
 	refresh();
 	refresh();
 

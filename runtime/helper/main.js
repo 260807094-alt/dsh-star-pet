@@ -304,8 +304,8 @@ function openSettings() {
 	}
 	const display = screen.getPrimaryDisplay();
 	const wa = display.workArea;
-	// 与 Tk 一致：内容区 260 + 左右各 22 = 304，再加 1px 描边
-	const w = 306;
+	// 与 Tk 一致：内容区 260 + 左右各 30 = 320，再加 1px 描边 → 322
+	const w = 322;
 	const h = 664;
 	settings = new BrowserWindow({
 		width: w,
@@ -435,7 +435,7 @@ async function bootstrap() {
 		cfg = snap.config || {};
 		winState = snap.window || null;
 		Object.assign(state, {
-			petSize: cfg.pet_size_index != null ? [108, 135, 162, 189, 216, 243, 270, 297, 324][cfg.pet_size_index] || 135 : 135,
+			petSize: cfg.pet_size_index != null ? [96, 108, 135][cfg.pet_size_index] || 135 : 135,
 			showChip: cfg.show_chip === true,
 			snapEnabled: cfg.snap_enabled !== false,
 			snapPx: Number(cfg.snap_px) || 28,
@@ -655,7 +655,7 @@ ipcMain.handle("pet:apply", async (_e, patch) => {
 		const r = await request("POST", "/config", patch || {});
 		if (r && r.config) {
 			Object.assign(state, {
-				petSize: [108, 135, 162, 189, 216, 243, 270, 297, 324][r.config.pet_size_index] || state.petSize,
+				petSize: [96, 108, 135][r.config.pet_size_index] || state.petSize,
 				showChip: r.config.show_chip === true,
 				snapEnabled: r.config.snap_enabled !== false,
 				snapPx: Number(r.config.snap_px) || state.snapPx,

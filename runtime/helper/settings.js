@@ -12,14 +12,14 @@ const S = window.starPet || {
 	openSettings: () => {},
 	quit: () => {},
 };
-const PET_SIZES = [108, 135, 162, 189, 216, 243, 270, 297, 324];
+const PET_SIZES = [96, 108, 135];
 const WD = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 const FLAGS = [
 	["snap_enabled", "贴边吸附"],
 	["flip_on_left", "贴左镜像"],
 	["sound", "点击音效"],
 	["show_chip", "胶囊"],
-	["roll_numbers", "数字滚动"],
+	["show_banter", "吐槽"],
 	["show_float", "赚到飘字"],
 ];
 
@@ -44,6 +44,9 @@ const DEFAULT = {
 	soft_font: true,
 	show_chip: false,
 	roll_numbers: true,
+	show_banter: true,
+	banter_every_sec: 30,
+	banter_mode: "workday",
 	show_float: true,
 	float_every_sec: 5,
 	// ── 加班（默认关闭）：独立时段，不接下班时间
@@ -62,6 +65,7 @@ const DEFAULT = {
 /** 加班倍率的按钮：值 → 显示文字。没有「自动」了，三档各配一个。 */
 const RATES = [
 	["0", "0"],
+	["1", "1"],
 	["1.5", "1.5"],
 	["2", "2"],
 	["3", "3"],
@@ -104,30 +108,53 @@ function el(tag, cls, text) {
 	return d;
 }
 
-/** 对应 Tk 的 _stepper：左侧 10pt 标签，右侧 [− 值 +]。 */
-function stepper(host, label, get, set, step, fmt) {
+/** 对应 Tk 的 _stepper：左侧 10pt 标签，右侧 [− 值 +]。
+ *  min/max 可以是数字或函数（函数每次刷新实时求值，用于跨字段联动灰态）。
+ *  任一字段变化后调用 refreshAll() 重算所有行的灰态。 */
+const _refreshFns = [];
+function refreshAll() {
+	for (const f of _refreshFns) f();
+}
+
+function stepper(host, label, get, set, step, fmt, _legacy, min, max) {
 	const row = el("div", "row");
 	row.appendChild(el("div", "lab", label));
 	const grp = el("div", "grp");
 	const minus = el("div", "sbtn", "−");
 	const val = el("div", "val", fmt(get()));
 	const plus = el("div", "sbtn", "+");
-	const sync = () => (val.textContent = fmt(get()));
+	const lo = () => (typeof min === "function" ? min() : typeof min === "number" ? min : 0);
+	const hi = () => (typeof max === "function" ? max() : typeof max === "number" ? max : null);
+	const refresh = () => {
+		const v = get();
+		val.textContent = fmt(v);
+		minus.classList.toggle("disabled", v <= lo());
+		const mx = hi();
+		plus.classList.toggle("disabled", mx != null && v >= mx);
+	};
 	minus.addEventListener("click", () => {
-		set(Math.max(0, get() - step));
-		sync();
+		const v = get();
+		if (v <= lo()) return;
+		set(Math.max(lo(), v - step));
+		refreshAll();
 	});
 	plus.addEventListener("click", () => {
-		set(get() + step);
-		sync();
+		const v = get();
+		const mx = hi();
+		if (mx != null && v >= mx) return;
+		set(mx != null ? Math.min(mx, v + step) : v + step);
+		refreshAll();
 	});
 	grp.append(minus, val, plus);
 	row.appendChild(grp);
 	host.appendChild(row);
+	_refreshFns.push(refresh);
+	refresh();
 	return val;
 }
 
 function build() {
+	_refreshFns.length = 0;
 	document.documentElement.style.setProperty(
 		"--pet-font",
 		cfg.soft_font !== false ? '"StarPetSoft","Microsoft YaHei",sans-serif' : '"Microsoft YaHei","Segoe UI",sans-serif'
@@ -140,52 +167,84 @@ function build() {
 
 	const time = document.getElementById("sec-time");
 	time.innerHTML = "";
-	stepper(time, "上班", () => parse(cfg.work_start, 540), (v) => (cfg.work_start = hhmm(v)), 30, hhmm);
-	stepper(time, "下班", () => parse(cfg.work_end, 1020), (v) => (cfg.work_end = hhmm(v)), 30, hhmm);
-	stepper(time, "午休开始", () => parse(cfg.lunch_start, 690), (v) => (cfg.lunch_start = hhmm(v)), 15, hhmm);
-	stepper(time, "午休", () => Number(cfg.lunch_minutes) || 0, (v) => (cfg.lunch_minutes = Math.min(300, Math.round(v))), 5, durShort);
+	const workStart = () => parse(cfg.work_start, 540);
+	const workEnd = () => parse(cfg.work_end, 1020);
+	const lunchStart = () => parse(cfg.lunch_start, 690);
+	const lunchMin = () => Number(cfg.lunch_minutes) || 0;
+	const otWStart = () => parse(cfg.overtime_start_workday, 1140);
+	const otWEnd = () => parse(cfg.overtime_end_workday, 1260);
+	const otRStart = () => parse(cfg.overtime_start_weekend, 540);
+	const otREnd = () => parse(cfg.overtime_end_weekend, 1020);
+
+	// 变灰规则（只变灰，不自动改值）：减号在 ≤下限时灰，加号在 ≥上限时灰。
+	// step：全部时间字段统一 15 分钟一档。
+	stepper(time, "上班", workStart, (v) => (cfg.work_start = hhmm(v)), 15, hhmm, null, 0, () => Math.min(workEnd() - 15, lunchStart()));
+	stepper(time, "下班", workEnd, (v) => (cfg.work_end = hhmm(v)), 15, hhmm, null, () => Math.max(workStart() + 15, lunchStart() + lunchMin()), () => Math.min(1439, otWStart()));
+	stepper(time, "午休开始", lunchStart, (v) => (cfg.lunch_start = hhmm(v)), 15, hhmm, null, () => workStart(), () => workEnd() - lunchMin());
+	stepper(time, "午休", lunchMin, (v) => (cfg.lunch_minutes = Math.min(300, Math.round(v))), 15, durShort, null, 0, () => Math.min(300, workEnd() - lunchStart()));
 
 	const wds = document.getElementById("wds");
-	wds.innerHTML = "";
-	const wset = new Set((cfg.work_weekdays || [1, 2, 3, 4, 5]).map(Number));
-	WD.forEach((name, i) => {
-		const b = el("div", "wd" + (wset.has(i + 1) ? " on" : ""), name);
-		b.addEventListener("click", () => {
-			if (wset.has(i + 1)) wset.delete(i + 1);
-			else wset.add(i + 1);
-			if (!wset.size) wset.add(i + 1);
-			b.classList.toggle("on", wset.has(i + 1));
-			cfg.work_weekdays = [...wset].sort((a, c) => a - c);
-			overview();
-		});
-		wds.appendChild(b);
-	});
-
 	const ot = document.getElementById("sec-ot");
 	ot.innerHTML = "";
 	// 开关在右键菜单里（默认关闭）；这里管「加班日 + 时段 + 三档倍率」
 	// 加班日：与上班日一样七天自选
 	ot.appendChild(el("div", "note", "加班日"));
 	const otDaysWrap = el("div", "wds");
+	const wset = new Set((cfg.work_weekdays || [1, 2, 3, 4, 5]).map(Number));
 	const otSet = new Set((cfg.overtime_weekdays || [1, 2, 3, 4, 5]).map(Number));
-	WD.forEach((name, i) => {
-		const b = el("div", "wd" + (otSet.has(i + 1) ? " on" : ""), name);
-		b.addEventListener("click", () => {
-			if (otSet.has(i + 1)) otSet.delete(i + 1);
-			else otSet.add(i + 1);
-			if (!otSet.size) otSet.add(i + 1);
-			b.classList.toggle("on", otSet.has(i + 1));
-			cfg.overtime_weekdays = [...otSet].sort((a, c) => a - c);
-			overview();
-		});
-		otDaysWrap.appendChild(b);
-	});
-	ot.appendChild(otDaysWrap);
 
-	stepper(ot, "上班日加班开始", () => parse(cfg.overtime_start_workday, 1140), (v) => (cfg.overtime_start_workday = hhmm(v)), 30, hhmm);
-	stepper(ot, "上班日加班结束", () => parse(cfg.overtime_end_workday, 1260), (v) => (cfg.overtime_end_workday = hhmm(v)), 30, hhmm);
-	stepper(ot, "非上班日加班开始", () => parse(cfg.overtime_start_weekend, 540), (v) => (cfg.overtime_start_weekend = hhmm(v)), 30, hhmm);
-	stepper(ot, "非上班日加班结束", () => parse(cfg.overtime_end_weekend, 1020), (v) => (cfg.overtime_end_weekend = hhmm(v)), 30, hhmm);
+	// 上班日 / 加班日里，周六(6)、周日(7)互斥：同一天不能既上班又加班。
+	// 未选中且对方已选中 → 该格变灰不可点；已选中则永远可点（能取消），
+	// 避免「两边都选中」的旧数据卡死无法解除。周一到周五不互斥（工作日晚上加班很正常）。
+	const renderWorkDays = () => {
+		wds.innerHTML = "";
+		WD.forEach((name, i) => {
+			const day = i + 1;
+			const conflict = !wset.has(day) && (day === 6 || day === 7) && otSet.has(day);
+			const b = el("div", "wd" + (wset.has(day) ? " on" : "") + (conflict ? " disabled" : ""), name);
+			b.addEventListener("click", () => {
+				if (conflict) return;
+				if (wset.has(day)) wset.delete(day);
+				else wset.add(day);
+				if (!wset.size) wset.add(day);
+				cfg.work_weekdays = [...wset].sort((a, c) => a - c);
+				renderWorkDays();
+				renderOtDays();
+				overview();
+			});
+			wds.appendChild(b);
+		});
+	};
+	const renderOtDays = () => {
+		otDaysWrap.innerHTML = "";
+		WD.forEach((name, i) => {
+			const day = i + 1;
+			const conflict = !otSet.has(day) && (day === 6 || day === 7) && wset.has(day);
+			const b = el("div", "wd" + (otSet.has(day) ? " on" : "") + (conflict ? " disabled" : ""), name);
+			b.addEventListener("click", () => {
+				if (conflict) return;
+				if (otSet.has(day)) otSet.delete(day);
+				else otSet.add(day);
+				if (!otSet.size) otSet.add(day);
+				cfg.overtime_weekdays = [...otSet].sort((a, c) => a - c);
+				renderWorkDays();
+				renderOtDays();
+				overview();
+			});
+			otDaysWrap.appendChild(b);
+		});
+	};
+
+	renderWorkDays();
+	ot.appendChild(otDaysWrap);
+	renderOtDays();
+
+	// 上班日加班开始最早 = max(17:00, 下班)；结束最晚 23:59。
+	// 非上班日加班开始最早 05:00；结束最晚 23:59。
+	stepper(ot, "上班日加班开始", otWStart, (v) => (cfg.overtime_start_workday = hhmm(v)), 15, hhmm, null, () => Math.max(1020, workEnd()), () => otWEnd() - 15);
+	stepper(ot, "上班日加班结束", otWEnd, (v) => (cfg.overtime_end_workday = hhmm(v)), 15, hhmm, null, () => otWStart() + 15, 1439);
+	stepper(ot, "非上班日加班开始", otRStart, (v) => (cfg.overtime_start_weekend = hhmm(v)), 15, hhmm, null, 300, () => otREnd() - 15);
+	stepper(ot, "非上班日加班结束", otREnd, (v) => (cfg.overtime_end_weekend = hhmm(v)), 15, hhmm, null, () => otRStart() + 15, 1439);
 
 	// 加班 ×倍工资：工作日 / 周末 / 节假日 三行，各自 0 / 1.5 / 2 / 3
 	ot.appendChild(el("div", "note", "加班 ×倍工资"));
@@ -213,9 +272,30 @@ function build() {
 
 	const look = document.getElementById("sec-look");
 	look.innerHTML = "";
-	stepper(look, "大小", () => Number(cfg.pet_size_index) || 0, (v) => (cfg.pet_size_index = Math.max(0, Math.min(8, Math.round(v)))), 1, (v) => PET_SIZES[Math.max(0, Math.min(8, Math.round(v)))] + " px");
 	stepper(look, "吸附范围", () => Number(cfg.snap_px) || 0, (v) => (cfg.snap_px = Math.max(0, Math.min(200, Math.round(v)))), 2, (v) => Math.round(v) + " px");
 	stepper(look, "冒钱间隔", () => Number(cfg.float_every_sec) || 5, (v) => (cfg.float_every_sec = Math.max(1, Math.min(10, Math.round(v)))), 1, (v) => Math.round(v) + " 秒");
+	stepper(look, "吐槽间隔", () => Number(cfg.banter_every_sec) || 30, (v) => (cfg.banter_every_sec = Math.max(5, Math.min(120, Math.round(v)))), 5, (v) => Math.round(v) + " 秒");
+
+	// 吐槽时段：上班/加班 才吐槽，或全天吐槽
+	const modeRow = el("div", "row");
+	modeRow.appendChild(el("div", "lab", "吐槽时段"));
+	const modeGrp = el("div", "rates");
+	const MODES = [["workday", "上班"], ["allday", "全天"]];
+	const paintMode = () => {
+		for (const b of modeGrp.children) b.classList.toggle("on", b.dataset.mode === (cfg.banter_mode || "workday"));
+	};
+	for (const [value, text] of MODES) {
+		const b = el("div", "rate", text);
+		b.dataset.mode = value;
+		b.addEventListener("click", () => {
+			cfg.banter_mode = value;
+			paintMode();
+		});
+		modeGrp.appendChild(b);
+	}
+	modeRow.appendChild(modeGrp);
+	look.appendChild(modeRow);
+	paintMode();
 
 	const flags = document.getElementById("flags");
 	flags.innerHTML = "";
@@ -252,43 +332,65 @@ function overview() {
 		["时薪", "¥" + money(perHour), "#3ad17f"],
 		["每秒", "¥" + perSec.toFixed(4), "#3ad17f"],
 	];
-	// 加班开启时补两行：加班时段 / 今日加班时薪
-	// （不再列倍率——三档倍率在「加班」分区里已经各自选好了）
-	if (cfg.overtime_enabled === true) {
-		const otStartWorkday = parse(cfg.overtime_start_workday, 1140);
-		const otEndWorkday = parse(cfg.overtime_end_workday, 1260);
-		const otStartWeekend = parse(cfg.overtime_start_weekend, 540);
-		const otEndWeekend = parse(cfg.overtime_end_weekend, 1020);
-		// 今日倍率：上班日看「工作日」档，非上班日看是节假日还是周末
-		const now = new Date();
-		const dow = now.getDay() === 0 ? 7 : now.getDay();
-		const wset = new Set((cfg.work_weekdays || [1, 2, 3, 4, 5]).map(Number));
-		const workdayToday = wset.has(dow);
-		const holSet = new Set((cfg.holidays || []).map(String));
-		const extraSet = new Set((cfg.extra_workdays || []).map(String));
-		const ds =
-			now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0") + "-" + String(now.getDate()).padStart(2, "0");
-		const holidayToday = holSet.has(ds) && !extraSet.has(ds);
-		const rateKey = workdayToday
-			? "overtime_rate_workday"
-			: holidayToday
-				? "overtime_rate_holiday"
-				: "overtime_rate_weekend";
-		const todayRate = Math.max(0, Number(cfg[rateKey]) || 0);
-		const spanFrom = workdayToday ? otStartWorkday : otStartWeekend;
-		const spanTo = workdayToday ? otEndWorkday : otEndWeekend;
-		// 今天是不是加班日（和上班日各自独立选）
-		const oset = new Set((cfg.overtime_weekdays || [1, 2, 3, 4, 5]).map(Number));
-		const otDayToday = oset.has(dow);
-		rows.push(
-			["加班时段", otDayToday ? hhmm(spanFrom) + "→" + hhmm(spanTo) : "今日不加班", "#5b9cff"],
-			["加班时薪", otDayToday ? "¥" + money(perHour * todayRate) : "—", "#3ad17f"]
-		);
+	// 「加班时段」这一行永远显示；只有「开了加班且今天是加班日」才显示具体时段，
+	// 否则一律「今日不宜加班」。值是按今天实际生效的那一对时段（上班日走上班日那对，非上班日走另一对）。
+	const otStartWorkday = parse(cfg.overtime_start_workday, 1140);
+	const otEndWorkday = parse(cfg.overtime_end_workday, 1260);
+	const otStartWeekend = parse(cfg.overtime_start_weekend, 540);
+	const otEndWeekend = parse(cfg.overtime_end_weekend, 1020);
+	// 今日倍率：与 renderer.js 的 isWorkday 完全一致 —— 补班日优先、节假日放假、
+	// 其余按上班日。之前只看 work_weekdays，漏了节假日/补班日，导致概览和
+	// 看板对「今天到底是上班日还是休息日、该用哪档倍率」判断不一致。
+	const now = new Date();
+	const dow = now.getDay() === 0 ? 7 : now.getDay();
+	const wset = new Set((cfg.work_weekdays || [1, 2, 3, 4, 5]).map(Number));
+	const holSet = new Set((cfg.holidays || []).map(String));
+	const extraSet = new Set((cfg.extra_workdays || []).map(String));
+	const ds =
+		now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0") + "-" + String(now.getDate()).padStart(2, "0");
+	const holidayToday = holSet.has(ds) && !extraSet.has(ds);
+	const workdayToday = extraSet.has(ds) ? true : (holidayToday ? false : wset.has(dow));
+	const rateKey = workdayToday
+		? "overtime_rate_workday"
+		: holidayToday
+			? "overtime_rate_holiday"
+			: "overtime_rate_weekend";
+	const todayRate = Math.max(0, Number(cfg[rateKey]) || 0);
+	const spanFrom = workdayToday ? otStartWorkday : otStartWeekend;
+	const spanTo = workdayToday ? otEndWorkday : otEndWeekend;
+	// 今天是不是加班日（和上班日各自独立选）
+	const oset = new Set((cfg.overtime_weekdays || [1, 2, 3, 4, 5]).map(Number));
+	const otDayToday = oset.has(dow);
+	// 只有「开了加班 + 今天是加班日 + 时段写反不算」才显示具体加班时段，否则今日不宜加班
+	const otActive = cfg.overtime_enabled === true && otDayToday && spanTo > spanFrom;
+	rows.push(["加班时段", otActive ? hhmm(spanFrom) + "→" + hhmm(spanTo) : "今日不宜加班", "#5b9cff"]);
+	if (otActive) {
+		// 蓝色追加的是「差价」：时薪 × (倍率 − 1)，只显示纯加班费。
+		// 倍率 ≤ 1 时差价为 0，就不在日薪/时薪里追加蓝色加班费。
+		const otPerHour = perHour * Math.max(0, todayRate - 1);
+		// 加班有效时长（分钟）：扣掉落在加班窗口里的午休 + 扣掉和上班时段重叠的部分，
+		// 与看板「窝囊费」同口径。
+		const lunchStartMin = parse(cfg.lunch_start, 690);
+		const lunchEndMin = lunchStartMin + lunch;
+		const lunchIn = (a, b) => Math.max(0, Math.min(b, lunchEndMin) - Math.max(a, lunchStartMin));
+		const otEffMin = Math.max(0, spanTo - spanFrom - lunchIn(spanFrom, spanTo));
+		let overlapMin = 0;
+		if (workdayToday) {
+			const ovLo = Math.max(start, spanFrom);
+			const ovHi = Math.min(end, spanTo);
+			if (ovHi > ovLo) overlapMin = Math.max(0, ovHi - ovLo - lunchIn(ovLo, ovHi));
+		}
+		const otSpanMin = Math.max(0, otEffMin - overlapMin);
+		const otDaily = perHour * Math.max(0, todayRate - 1) * (otSpanMin / 60);
+		rows[0][1] = "¥" + money(daily) + "  <span style=\"color:#5b9cff\">+ ¥" + money(otDaily) + "</span>";
+		rows[1][1] = "¥" + money(perHour) + "  <span style=\"color:#5b9cff\">+ ¥" + money(otPerHour) + "</span>";
 	}
 	for (const [k, v, color] of rows) {
 		box.appendChild(el("div", "k", k));
-		const val = el("div", "v", v);
+		const val = el("div", "v");
 		val.style.color = color;
+		// 概览值可能带 <span>（蓝色追加加班费），用 innerHTML；纯文本行不含 HTML 字符，同样安全。
+		val.innerHTML = v;
 		box.appendChild(val);
 	}
 }
@@ -298,23 +400,49 @@ function say(text) {
 }
 
 async function save() {
-	if (parse(cfg.work_start, 540) >= parse(cfg.work_end, 1020)) {
+	// 完整时间链（无论加班开关开或关都校验）：
+	//   00:00 ≤ 上班 ≤ 午休开始 ≤ 午休结束 ≤ 下班 ≤ 上班日加班开始 < 加班结束 ≤ 23:59（且加班开始 ≥ 17:00）
+	//   非上班日：05:00 ≤ 加班开始 < 加班结束 ≤ 23:59
+	const ws = parse(cfg.work_start, 540);
+	const we = parse(cfg.work_end, 1020);
+	const ls = parse(cfg.lunch_start, 690);
+	const lm = Number(cfg.lunch_minutes) || 0;
+	const le = ls + lm;
+	if (we <= ws) {
 		say("下班时间必须晚于上班时间。");
 		return;
 	}
-	// 加班开关关掉时，加班时段是无关字段，不参与校验（否则用户改了加班时段后关掉加班，
-	// 再改个月薪都会被这条拦下来存不了）。
-	if (cfg.overtime_enabled === true) {
-		const otWs = parse(cfg.overtime_start_weekend, 540);
-		const otWe = parse(cfg.overtime_end_weekend, 1020);
-		if (otWs >= otWe) {
-			say("非上班日加班结束必须晚于开始。");
-			return;
-		}
-		if (parse(cfg.overtime_start_workday, 1140) >= parse(cfg.overtime_end_workday, 1260)) {
-			say("上班日加班结束必须晚于开始。");
-			return;
-		}
+	if (ls < ws) {
+		say("午休开始不能早于上班时间。");
+		return;
+	}
+	if (le > we) {
+		say("午休结束（午休开始 + 午休时长）不能晚于下班时间。");
+		return;
+	}
+	const otWS = parse(cfg.overtime_start_workday, 1140);
+	const otWE = parse(cfg.overtime_end_workday, 1260);
+	if (otWS < 1020) {
+		say("上班日加班开始不能早于 17:00。");
+		return;
+	}
+	if (otWS < we) {
+		say("上班日加班开始必须晚于下班时间。");
+		return;
+	}
+	if (otWE <= otWS) {
+		say("上班日加班结束必须晚于开始。");
+		return;
+	}
+	const otRS = parse(cfg.overtime_start_weekend, 540);
+	const otRE = parse(cfg.overtime_end_weekend, 1020);
+	if (otRS < 300) {
+		say("非上班日加班开始不能早于 05:00。");
+		return;
+	}
+	if (otRE <= otRS) {
+		say("非上班日加班结束必须晚于开始。");
+		return;
 	}
 	try {
 		const r = await S.apply({ ...cfg });

@@ -5,7 +5,7 @@
  * 选中后立即写回配置，主窗 250ms 轮询会自动跟上。
  */
 const S = window.starPet;
-const PET_SIZES = [108, 135, 162, 189, 216, 243, 270, 297, 324];
+const PET_SIZES = [96, 108, 135];
 const kind = new URLSearchParams(location.search).get("kind") === "sizes" ? "sizes" : "menu";
 
 let cfg = {};
