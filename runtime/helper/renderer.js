@@ -343,10 +343,12 @@ function snapshot(D, now) {
 			// 今天明明干了活，退回「今天休息」是错的。
 			if (!workday && cur >= otEndMin) phase = "after";
 			// 落在加班窗口内 → 阶段显示「加班中」（优先于 搬砖中/今天休息）。
-			// 但上班日的午休落在加班窗口内时不算加班（人得吃饭），保持「午休中」，
+			// 但午休落在加班窗口内时不算加班（人得吃饭），保持「午休中」，
 			// 否则午休那 1.5 小时会一边显示「加班中」一边按加班倍率冒钱、金额却卡着不涨。
+			// 上班日和休息日都要做这个判定：休息日也没有午休工资，
+			// 午休期间金额同样冻结，显示「加班中」会自相矛盾。
 			if (cur < otEndMin) {
-				const inLunch = workday && cur >= ls2 && cur < le2;
+				const inLunch = cur >= ls2 && cur < le2;
 				phase = inLunch ? "lunch" : "overtime";
 			}
 			// 加班窗口压到正常上班时段时（例如 16:00–20:00），这一段既在基础工时里、
@@ -630,7 +632,7 @@ function refreshPanel(snap) {
 	const moneyTxt = "¥" + money(v);
 	if (P.money.textContent !== moneyTxt) P.money.textContent = moneyTxt;
 
-	const phaseTxt = { working: "搬砖中", lunch: "午休中", before: "还没上班", after: "已收工", rest: "今天休息", idle: "休息中", overtime: "加班中" }[snap.phase] || "—";
+	const phaseTxt = { working: "搬砖中", lunch: "休息中", before: "还没上班", after: "已收工", rest: "今天休息", idle: "休息中", overtime: "加班中" }[snap.phase] || "—";
 	const wd = WD_NAMES[(snap.now.getDay() + 6) % 7];
 	P.phase.textContent = phaseTxt + " · " + wd;
 	const clk = String(snap.now.getMonth() + 1).padStart(2, "0") + "-" + String(snap.now.getDate()).padStart(2, "0") + " " + String(snap.now.getHours()).padStart(2, "0") + ":" + String(snap.now.getMinutes()).padStart(2, "0");
