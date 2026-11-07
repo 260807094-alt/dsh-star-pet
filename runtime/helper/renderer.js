@@ -144,9 +144,9 @@ function computeState(cfg) {
 	const dailyWage = cfg.daily_wage ? Number(cfg.daily_wage) : null;
 	// 月计薪天数：与 lib/index.js sanitizePatch 的 Math.max(1, ...) 保持一致。
 	// 之前直接 `Number(...) || 21.75` 有两个坑：0 会被当成「没填」跳回 21.75，
-	// 负数会一路带到看板让金额变负。这里统一夹到 ≥1，非法值才回退默认。
+	// 负数会一路带到看板让金额变负。这里统一夹到 1~30（一个月最多 30 天），非法值才回退默认。
 	const payDaysRaw = Number(cfg.pay_days_per_month);
-	const payDays = Number.isFinite(payDaysRaw) && payDaysRaw >= 1 ? payDaysRaw : 21.75;
+	const payDays = Number.isFinite(payDaysRaw) && payDaysRaw >= 1 ? Math.min(30, payDaysRaw) : 21.75;
 	const startMin = parseHHMM(cfg.work_start, 540);
 	const endMin = parseHHMM(cfg.work_end, 1020);
 	const lunchMin = Math.max(0, parseInt(cfg.lunch_minutes || 0, 10) || 0);

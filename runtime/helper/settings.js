@@ -163,13 +163,14 @@ function build() {
 	const pay = document.getElementById("sec-pay");
 	pay.innerHTML = "";
 	stepper(pay, "月薪", () => Number(cfg.monthly_wage) || 0, (v) => (cfg.monthly_wage = Math.round(v * 100) / 100), 100, (v) => "¥" + Math.round(v).toLocaleString("en-US"), true);
-	// 月计薪天数：最小值 1（与 lib/index.js sanitizePatch 的 Math.max(1, ...) 对齐）。
-	// 读取用「≥1 才采用」，不能用 `|| 21.75`——那样按到 0 会当场跳回 21.75。
+	// 月计薪天数：1 ~ 30（一个月最多 30 天，30 天 = 不扣周末，全月算薪）。
+	// 最小值 1 与 lib/index.js sanitizePatch 的 Math.max(1, ...) 对齐。
+	// 读取用「1~30 才采用」，不能用 `|| 21.75`——那样按到 0 会当场跳回 21.75。
 	const payDaysGet = () => {
 		const v = Number(cfg.pay_days_per_month);
-		return Number.isFinite(v) && v >= 1 ? v : 21.75;
+		return Number.isFinite(v) && v >= 1 ? Math.min(30, v) : 21.75;
 	};
-	stepper(pay, "月计薪天数", payDaysGet, (v) => (cfg.pay_days_per_month = Math.max(1, Math.round(v * 100) / 100)), 0.25, (v) => Number(v).toFixed(2), null, 1);
+	stepper(pay, "月计薪天数", payDaysGet, (v) => (cfg.pay_days_per_month = Math.max(1, Math.min(30, Math.round(v * 100) / 100))), 0.25, (v) => Number(v).toFixed(2), null, 1, 30);
 
 	const time = document.getElementById("sec-time");
 	time.innerHTML = "";
@@ -334,7 +335,7 @@ function overview() {
 	const monthly = monthlyFilled ? Math.max(0, Number(cfg.monthly_wage) || 0) : 10000;
 	const payDaysOf = () => {
 		const v = Number(cfg.pay_days_per_month);
-		return Number.isFinite(v) && v >= 1 ? v : 21.75;
+		return Number.isFinite(v) && v >= 1 ? Math.min(30, v) : 21.75;
 	};
 	const daily = cfg.daily_wage ? Number(cfg.daily_wage) : monthly / payDaysOf();
 	const perHour = paid > 0 ? daily / (paid / 60) : 0;
