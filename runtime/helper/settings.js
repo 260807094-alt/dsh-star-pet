@@ -163,7 +163,13 @@ function build() {
 	const pay = document.getElementById("sec-pay");
 	pay.innerHTML = "";
 	stepper(pay, "月薪", () => Number(cfg.monthly_wage) || 0, (v) => (cfg.monthly_wage = Math.round(v * 100) / 100), 100, (v) => "¥" + Math.round(v).toLocaleString("en-US"), true);
-	stepper(pay, "月计薪天数", () => Number(cfg.pay_days_per_month) || 21.75, (v) => (cfg.pay_days_per_month = Math.round(v * 100) / 100), 0.25, (v) => Number(v).toFixed(2));
+	// 月计薪天数：最小值 1（与 lib/index.js sanitizePatch 的 Math.max(1, ...) 对齐）。
+	// 读取用「≥1 才采用」，不能用 `|| 21.75`——那样按到 0 会当场跳回 21.75。
+	const payDaysGet = () => {
+		const v = Number(cfg.pay_days_per_month);
+		return Number.isFinite(v) && v >= 1 ? v : 21.75;
+	};
+	stepper(pay, "月计薪天数", payDaysGet, (v) => (cfg.pay_days_per_month = Math.max(1, Math.round(v * 100) / 100)), 0.25, (v) => Number(v).toFixed(2), null, 1);
 
 	const time = document.getElementById("sec-time");
 	time.innerHTML = "";
@@ -322,7 +328,15 @@ function overview() {
 	// 只扣真正落在上下班区间内的午休（与 renderer.js 的 computeState 保持一致）。
 	const lunchOverlap = Math.max(0, Math.min(end, lunchStart + lunch) - Math.max(start, lunchStart));
 	const paid = Math.max(0, end - start - lunchOverlap);
-	const daily = cfg.daily_wage ? Number(cfg.daily_wage) : (Number(cfg.monthly_wage) || 0) / (Number(cfg.pay_days_per_month) || 21.75);
+	// 与 renderer.js computeState 保持一致：只有「月薪没填」才回退 10000，
+	// 填 0 就是 0（否则设置页显示 ¥0、看板却按 1 万冒钱）。
+	const monthlyFilled = cfg.monthly_wage != null && String(cfg.monthly_wage).trim() !== "";
+	const monthly = monthlyFilled ? Math.max(0, Number(cfg.monthly_wage) || 0) : 10000;
+	const payDaysOf = () => {
+		const v = Number(cfg.pay_days_per_month);
+		return Number.isFinite(v) && v >= 1 ? v : 21.75;
+	};
+	const daily = cfg.daily_wage ? Number(cfg.daily_wage) : monthly / payDaysOf();
 	const perHour = paid > 0 ? daily / (paid / 60) : 0;
 	const perSec = paid > 0 ? daily / (paid * 60) : 0;
 	// 概览只列「钱」和「加班」：上班/下班/午休/计薪 在「时间」分区里已经有了，
@@ -368,22 +382,20 @@ function overview() {
 		// 蓝色追加的是「差价」：时薪 × (倍率 − 1)，只显示纯加班费。
 		// 倍率 ≤ 1 时差价为 0，就不在日薪/时薪里追加蓝色加班费。
 		const otPerHour = perHour * Math.max(0, todayRate - 1);
-		// 加班有效时长（分钟）：扣掉落在加班窗口里的午休 + 扣掉和上班时段重叠的部分，
-		// 与看板「窝囊费」同口径。
+		// 加班有效时长（分钟）：扣掉落在加班窗口里的午休。
+		// 与看板「窝囊费」同口径 —— 窝囊费就是加班工资，不含基本工资、不含午休。
 		const lunchStartMin = parse(cfg.lunch_start, 690);
 		const lunchEndMin = lunchStartMin + lunch;
 		const lunchIn = (a, b) => Math.max(0, Math.min(b, lunchEndMin) - Math.max(a, lunchStartMin));
-		const otEffMin = Math.max(0, spanTo - spanFrom - lunchIn(spanFrom, spanTo));
-		let overlapMin = 0;
-		if (workdayToday) {
-			const ovLo = Math.max(start, spanFrom);
-			const ovHi = Math.min(end, spanTo);
-			if (ovHi > ovLo) overlapMin = Math.max(0, ovHi - ovLo - lunchIn(ovLo, ovHi));
-		}
-		const otSpanMin = Math.max(0, otEffMin - overlapMin);
-		const otDaily = perHour * Math.max(0, todayRate - 1) * (otSpanMin / 60);
-		rows[0][1] = "¥" + money(daily) + "  <span style=\"color:#5b9cff\">+ ¥" + money(otDaily) + "</span>";
-		rows[1][1] = "¥" + money(perHour) + "  <span style=\"color:#5b9cff\">+ ¥" + money(otPerHour) + "</span>";
+		const otSpanMin = Math.max(0, spanTo - spanFrom - lunchIn(spanFrom, spanTo));
+		// 加班工资 = 时薪 × (倍率 − 1) × 加班时长：只算「比正常工资多出来的部分」。
+		// 倍率 1 一分不多 = ¥0.00；倍率 2 多赚一份；倍率 3 多赚两份。
+		const otDaily = perHour * Math.max(0, todayRate - 1) * otSpanMin / 60;
+		// 只有真有多赚出来的钱才追加蓝字（倍率 1 时加班工资是 0，不显示 "+ ¥0.00"）。
+		const otAdd = otDaily > 0.005 ? "  <span style=\"color:#5b9cff\">+ ¥" + money(otDaily) + "</span>" : "";
+		const otHourAdd = otPerHour > 0.005 ? "  <span style=\"color:#5b9cff\">+ ¥" + money(otPerHour) + "</span>" : "";
+		rows[0][1] = "¥" + money(daily) + otAdd;
+		rows[1][1] = "¥" + money(perHour) + otHourAdd;
 	}
 	for (const [k, v, color] of rows) {
 		box.appendChild(el("div", "k", k));

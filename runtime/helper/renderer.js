@@ -137,9 +137,16 @@ function blend(c1, c2, t) {
 }
 
 function computeState(cfg) {
-	const monthly = Number(cfg.monthly_wage) || 10000;
+	// 月薪 0 是合法设置（例如待业、只靠加班赚钱），不能被 `|| 10000` 吞成默认值，
+	// 否则设置页显示 0、看板却按 1 万冒钱。只有「没填」才回退 10000。
+	const monthlyFilled = cfg.monthly_wage != null && String(cfg.monthly_wage).trim() !== "";
+	const monthly = monthlyFilled ? Math.max(0, Number(cfg.monthly_wage) || 0) : 10000;
 	const dailyWage = cfg.daily_wage ? Number(cfg.daily_wage) : null;
-	const payDays = Number(cfg.pay_days_per_month) || 21.75;
+	// 月计薪天数：与 lib/index.js sanitizePatch 的 Math.max(1, ...) 保持一致。
+	// 之前直接 `Number(...) || 21.75` 有两个坑：0 会被当成「没填」跳回 21.75，
+	// 负数会一路带到看板让金额变负。这里统一夹到 ≥1，非法值才回退默认。
+	const payDaysRaw = Number(cfg.pay_days_per_month);
+	const payDays = Number.isFinite(payDaysRaw) && payDaysRaw >= 1 ? payDaysRaw : 21.75;
 	const startMin = parseHHMM(cfg.work_start, 540);
 	const endMin = parseHHMM(cfg.work_end, 1020);
 	const lunchMin = Math.max(0, parseInt(cfg.lunch_minutes || 0, 10) || 0);
@@ -245,16 +252,10 @@ function overtimePayForDay(D, d) {
 	const le = ls + D.lunchMin;
 	const lunchIn = Math.max(0, Math.min(end, le) - Math.max(start, ls));
 	const spanMin = Math.max(0, end - start - lunchIn);
-	// 与上班时段重叠的那部分基础工资已经算在日薪里，只补倍率差额（只有上班日才有重叠）
-	let overlapMin = 0;
-	if (workday) {
-		const ovLo = Math.max(D.startMin, start);
-		const ovHi = Math.min(D.endMin, end);
-		if (ovHi > ovLo) {
-			overlapMin = Math.max(0, ovHi - ovLo - Math.max(0, Math.min(ovHi, le) - Math.max(ovLo, ls)));
-		}
-	}
-	return Math.max(0, D.perSec * Math.max(0, rate - 1) * Math.max(0, spanMin - overlapMin) * 60);
+	// 窝囊费 = 加班工资（只算「比正常工资多出来的部分」）：
+	// 不含基本工资（基本工资在日薪格里）、不含午休（spanMin 已扣过午休）。
+	// 倍率 1 → 一分不多 = ¥0.00；倍率 2 → 多赚一份；倍率 3 → 多赚两份。
+	return Math.max(0, D.perSec * Math.max(0, rate - 1) * spanMin * 60);
 }
 
 /** 本月剩余（含今天）：基本工资天数/金额 + 这些天按当前设置能拿的加班工资。 */
@@ -369,6 +370,17 @@ function snapshot(D, now) {
 	const overlapPay = otRate > 0 ? D.perSec * overlapMin * 60 : 0;
 	const rem = monthRemaining(D, now);
 	const remDays = rem.days;
+	// 窝囊费 = 加班工资 = 「比正常时薪多出来的那部分」。
+	// 不含基本工资（基本工资本来就在日薪格里）、不含午休（otSpanMin 已经扣过午休）。
+	// 倍率 1 → 一分不多，窝囊费 ¥0.00；倍率 2 → 多赚一倍时长；倍率 3 → 多赚两倍时长。
+	const otOverBase = otRate > 0 ? Math.max(0, D.perSec * Math.max(0, otRate - 1) * otSpanMin * 60) : 0;
+	// 日薪格：上班日总有基本日薪；休息日只有「开了加班且今天确实是加班日」
+	// 才算这天有工资（没排加班的休息日显示 0，否则和「今日已赚 ¥0.00」矛盾）。
+	const dailyTotal = workday || (D.otOn && otDay) ? D.daily : 0;
+	// 窝囊费 = 加班超出基本工资的那部分（差价口径，与设置窗概览的蓝字同源）。
+	// 注意：它不等于「今日已赚 − 日薪格」——休息日没有基本工资，日薪格
+	// 那 459.77 只是「这天按一天算」的展示口径，不进今日已赚。
+	const otDaily = otOverBase;
 	// otSpanMin 在上面的加班分支里已经算好（扣过午休），这里不能再声明一次。
 	return {
 		now, workday, phase,
@@ -392,14 +404,14 @@ function snapshot(D, now) {
 		// 今天实际生效的那一对加班时段（工作日走上班日那对，非上班日走另一对），
 		// 看板上的「加班 18:00→21:00」必须显示今天真正在用的这一对
 		otStartMin, otEndMin,
-		// 今日加班费（差价口径）：只算「多赚的部分」= 每秒 × (倍率−1) × 有效加班秒数，
-		// 与设置页概览的蓝色差价完全一致。与上班时段重叠的那部分基础工资已含在
-		// 「日薪」里，这里不再按差价重复计入（重叠段从有效时长里剔除）。
-		otDaily: otRate > 0 ? Math.max(0, D.perSec * Math.max(0, otRate - 1) * Math.max(0, otSpanMin - overlapSpanMin) * 60) : 0,
-		// 日薪柱只显示「基本日薪」（绿色，与设置页概览的绿色基本薪资一致）。
-		// 只要这天有工资（上班日，或选了加班的周末/节假日），日薪都显示基本日薪，
-		// 加班赚的钱另看「窝囊费」这一格，两者分开，不再叠加。
-		dailyTotal: D.daily,
+		// 窝囊费：非重叠部分按满倍率、与上班时段重叠的部分只补倍率差额。
+		// 化简后 = 每秒 × (倍率 × 有效时长 − 重叠时长) × 60。
+		// 不能写成「(倍率−1) × (有效时长 − 重叠时长)」——那样非重叠的加班只按
+		// 0.5 倍发钱（19:00-21:00 ×1.5 会少给 141.47），是之前的实际 bug。
+		otDaily,
+		// 日薪柱：上班日显示基本日薪；休息日只有「开了加班且今天确实是加班日」
+		// 才算这天有工资，且夹到今天实际能赚到的金额以内。
+		dailyTotal,
 	};
 }
 
