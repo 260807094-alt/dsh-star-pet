@@ -339,6 +339,9 @@ function snapshot(D, now) {
 		if (cur >= otStartMin) {
 			otWorked = otEffMin(cur) * 60;
 			worked += otWorked;
+			// 非上班日（这里只可能是「加班日」）加班时段走完了，按「已收工」显示。
+			// 今天明明干了活，退回「今天休息」是错的。
+			if (!workday && cur >= otEndMin) phase = "after";
 			// 落在加班窗口内 → 阶段显示「加班中」（优先于 搬砖中/今天休息）。
 			// 但上班日的午休落在加班窗口内时不算加班（人得吃饭），保持「午休中」，
 			// 否则午休那 1.5 小时会一边显示「加班中」一边按加班倍率冒钱、金额却卡着不涨。
@@ -361,7 +364,12 @@ function snapshot(D, now) {
 			}
 		}
 	}
-	const progress = D.netSec > 0 ? Math.max(0, Math.min(1, baseWorked / D.netSec)) : 0;
+	// 进度条：上班日按「已上工时 / 应上工时」；休息日没有基本工时，
+	// 改按「加班已过时长 / 加班总时长」，否则休息日加班永远停在 0%。
+	const otSpanSec = otSpanMin * 60;
+	const progress = workday
+		? (D.netSec > 0 ? Math.max(0, Math.min(1, baseWorked / D.netSec)) : 0)
+		: (otSpanSec > 0 ? Math.max(0, Math.min(1, otWorked / otSpanSec)) : 0);
 	const otEarned = D.perSec * otRate * otWorked;
 	// 加班窗口压进上班时段的那几分钟已经含在 daily*progress 里了，
 	// 再按倍率算一次就是重复计薪；这里把重叠段按「一倍工资」扣回来。
@@ -374,20 +382,27 @@ function snapshot(D, now) {
 	// 不含基本工资（基本工资本来就在日薪格里）、不含午休（otSpanMin 已经扣过午休）。
 	// 倍率 1 → 一分不多，窝囊费 ¥0.00；倍率 2 → 多赚一倍时长；倍率 3 → 多赚两倍时长。
 	const otOverBase = otRate > 0 ? Math.max(0, D.perSec * Math.max(0, otRate - 1) * otSpanMin * 60) : 0;
-	// 日薪格：上班日总有基本日薪；休息日只有「开了加班且今天确实是加班日」
-	// 才算这天有工资（没排加班的休息日显示 0，否则和「今日已赚 ¥0.00」矛盾）。
-	const dailyTotal = workday || (D.otOn && otDay) ? D.daily : 0;
+	// 日薪格：上班日总有基本日薪；休息日只有「开了加班、今天是加班日、
+	// 而且倍率 > 0」才算这天有工资。倍率 0 是白加班，休息日本来就没有基本工资，
+	// 这时显示 0；没排加班的休息日同理。
+	const dailyTotal = workday ? D.daily : D.otOn && otDay && otRate > 0 ? D.daily : 0;
 	// 窝囊费 = 加班超出基本工资的那部分（差价口径，与设置窗概览的蓝字同源）。
 	// 注意：它不等于「今日已赚 − 日薪格」——休息日没有基本工资，日薪格
 	// 那 459.77 只是「这天按一天算」的展示口径，不进今日已赚。
 	const otDaily = otOverBase;
 	// otSpanMin 在上面的加班分支里已经算好（扣过午休），这里不能再声明一次。
+	// 已赚 = 基本工资（只有上班日有）+ 加班工资 − 重叠段重复计的部分。
+	// 休息日没有基本工资，干多久拿多少全看加班倍率：×0 白干 ¥0.00、×1 原价、
+	// ×2 双倍；不能额外再叠一份 D.daily×progress，否则 ×1 会变成双倍工资。
+	const earned = workday
+		? Math.max(0, D.daily * progress + otEarned - overlapPay)
+		: Math.max(0, otEarned);
 	return {
 		now, workday, phase,
 		// 重叠段在 baseWorked 与 otWorked 里各算了一次，显示「已工作」时只能算一次
 		worked: Math.max(0, worked - overlapMin * 60),
 		progress,
-		earned: Math.max(0, D.daily * progress + otEarned - overlapPay),
+		earned,
 		remaining: Math.max(0, D.netSec - baseWorked),
 		// 加班中：这一栏改成「距离加班结束」，显示加班还剩多久
 		// 倒计时只跟「加班是否正在进行」走，与倍率无关：倍率 0 也是加班，得照常倒数。
@@ -622,10 +637,17 @@ function refreshPanel(snap) {
 	if (P.clock.textContent !== clk) P.clock.textContent = clk;
 
 	const D = snap.D;
-	const secRate = D.perSec * (snap.phase === "overtime" ? snap.otRate : 1);
+	// 每秒速度：上班日非加班时段按基本时薪；加班时段按倍率。
+	// 休息日没有基本工资，只有加班时段在进账，其余时段速度就是 0
+	//（否则「已收工」还写着每秒 ¥0.0360，和不动的大金额自相矛盾）。
+	const secRate = snap.phase === "overtime"
+		? D.perSec * snap.otRate
+		: snap.workday
+			? D.perSec
+			: 0;
 	const sub = snap.phase === "overtime"
 		? "加班 ×" + snap.otRate + " · 每秒 ¥" + secRate.toFixed(4)
-		: "今日已赚 · 每秒 ¥" + (D.perSec || 0).toFixed(4);
+		: "今日已赚 · 每秒 ¥" + (secRate || 0).toFixed(4);
 	if (P.sub.textContent !== sub) P.sub.textContent = sub;
 
 	const pct = Math.round(snap.progress * 100);
@@ -650,10 +672,26 @@ function refreshPanel(snap) {
 		P.remaining.textContent = durText(Math.max(0, (snap.otStartMin - cur) * 60));
 	} else {
 		if (P.remainingLabel && P.remainingLabel.textContent !== "距离下班") P.remainingLabel.textContent = "距离下班";
-		P.remaining.textContent = durText(snap.remaining);
+		// 休息日没有「下班」这回事：加班日干完显示「—」，非加班日也显示「—」，
+		// 否则会一直挂着「距离下班 6:30:00」和一个不动的金额自相矛盾。
+		P.remaining.textContent = snap.workday ? durText(snap.remaining) : "—";
 	}
-	P.startat.textContent = fmtHHMM(D.startMin);
-	P.endat.textContent = fmtHHMM(D.endMin);
+	// 「上班 / 下班」显示今天真正生效的那一对时段：
+	// 上班日 → 上下班时间；加班日 → 加班时段（工作日那对或非上班日那对）；
+	// 非上班日又不加班 → 今天没有时段可言，显示「—」，
+	// 否则会出现「今天休息」却还写着 09:00 / 17:00 的矛盾显示。
+	const dow = snap.now.getDay() === 0 ? 7 : snap.now.getDay();
+	const spanOtToday = D.otOn && D.otDays.includes(dow) && snap.otEndMin > snap.otStartMin;
+	if (snap.workday) {
+		P.startat.textContent = fmtHHMM(D.startMin);
+		P.endat.textContent = fmtHHMM(D.endMin);
+	} else if (spanOtToday) {
+		P.startat.textContent = fmtHHMM(snap.otStartMin);
+		P.endat.textContent = fmtHHMM(snap.otEndMin);
+	} else {
+		P.startat.textContent = "—";
+		P.endat.textContent = "—";
+	}
 	// 加班时段 + 窝囊费：窝囊费就是今天的加班工资（加班多受的那份气换来的钱）。
 	// 不加班就是 0。和上面的「日薪」（基础日薪 + 加班工资）一对看，
 	// 日薪 − 窝囊费 = 不含加班的基础日薪。

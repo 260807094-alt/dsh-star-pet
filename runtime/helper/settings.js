@@ -201,20 +201,28 @@ function build() {
 	const otSet = new Set((cfg.overtime_weekdays || [1, 2, 3, 4, 5]).map(Number));
 
 	// 上班日 / 加班日里，周六(6)、周日(7)互斥：同一天不能既上班又加班。
-	// 未选中且对方已选中 → 该格变灰不可点；已选中则永远可点（能取消），
-	// 避免「两边都选中」的旧数据卡死无法解除。周一到周五不互斥（工作日晚上加班很正常）。
+	// 点未选中的那一天时「抢占」：把对面那天的同一天让出来。
+	// 但如果让出来会让对面集合变空（例如加班日只有周六，却硬要把它改成上班日），
+	// 就拒绝这次点击——「加班日至少选一天」优先于抢占，否则会出现空加班日。
+	// 周一到周五不互斥（工作日晚上加班很正常）。
 	const renderWorkDays = () => {
 		wds.innerHTML = "";
 		WD.forEach((name, i) => {
 			const day = i + 1;
-			const conflict = !wset.has(day) && (day === 6 || day === 7) && otSet.has(day);
-			const b = el("div", "wd" + (wset.has(day) ? " on" : "") + (conflict ? " disabled" : ""), name);
+			// 已经选中的永远可点（能取消）；未选中且对面占着才需要走抢占路径
+			const steal = !wset.has(day) && (day === 6 || day === 7) && otSet.has(day);
+			const blocked = steal && otSet.size <= 1;
+			const b = el("div", "wd" + (wset.has(day) ? " on" : "") + (blocked ? " disabled" : ""), name);
 			b.addEventListener("click", () => {
-				if (conflict) return;
+				if (blocked) return;
 				if (wset.has(day)) wset.delete(day);
-				else wset.add(day);
+				else {
+					if (steal) otSet.delete(day); // 抢占：把这天从加班日里让出来
+					wset.add(day);
+				}
 				if (!wset.size) wset.add(day);
 				cfg.work_weekdays = [...wset].sort((a, c) => a - c);
+				cfg.overtime_weekdays = [...otSet].sort((a, c) => a - c);
 				renderWorkDays();
 				renderOtDays();
 				overview();
@@ -226,14 +234,19 @@ function build() {
 		otDaysWrap.innerHTML = "";
 		WD.forEach((name, i) => {
 			const day = i + 1;
-			const conflict = !otSet.has(day) && (day === 6 || day === 7) && wset.has(day);
-			const b = el("div", "wd" + (otSet.has(day) ? " on" : "") + (conflict ? " disabled" : ""), name);
+			const steal = !otSet.has(day) && (day === 6 || day === 7) && wset.has(day);
+			const blocked = steal && wset.size <= 1;
+			const b = el("div", "wd" + (otSet.has(day) ? " on" : "") + (blocked ? " disabled" : ""), name);
 			b.addEventListener("click", () => {
-				if (conflict) return;
+				if (blocked) return;
 				if (otSet.has(day)) otSet.delete(day);
-				else otSet.add(day);
+				else {
+					if (steal) wset.delete(day); // 抢占：把这天从上班日里让出来
+					otSet.add(day);
+				}
 				if (!otSet.size) otSet.add(day);
 				cfg.overtime_weekdays = [...otSet].sort((a, c) => a - c);
+				cfg.work_weekdays = [...wset].sort((a, c) => a - c);
 				renderWorkDays();
 				renderOtDays();
 				overview();
@@ -376,6 +389,14 @@ function overview() {
 	// 今天是不是加班日（和上班日各自独立选）
 	const oset = new Set((cfg.overtime_weekdays || [1, 2, 3, 4, 5]).map(Number));
 	const otDayToday = oset.has(dow);
+	// 日薪与看板同口径：上班日总有基本日薪；休息日只有「开了加班 + 今天是加班日
+	// + 倍率 > 0」才算这天有工资。倍率 0 是白加班，休息日本来没有基本工资，显示 0。
+	const dailyToday = workdayToday
+		? daily
+		: cfg.overtime_enabled === true && otDayToday && todayRate > 0
+			? daily
+			: 0;
+	rows[0][1] = "¥" + money(dailyToday);
 	// 只有「开了加班 + 今天是加班日 + 时段写反不算」才显示具体加班时段，否则今日不宜加班
 	const otActive = cfg.overtime_enabled === true && otDayToday && spanTo > spanFrom;
 	rows.push(["加班时段", otActive ? hhmm(spanFrom) + "→" + hhmm(spanTo) : "今日不宜加班", "#5b9cff"]);
@@ -395,7 +416,7 @@ function overview() {
 		// 只有真有多赚出来的钱才追加蓝字（倍率 1 时加班工资是 0，不显示 "+ ¥0.00"）。
 		const otAdd = otDaily > 0.005 ? "  <span style=\"color:#5b9cff\">+ ¥" + money(otDaily) + "</span>" : "";
 		const otHourAdd = otPerHour > 0.005 ? "  <span style=\"color:#5b9cff\">+ ¥" + money(otPerHour) + "</span>" : "";
-		rows[0][1] = "¥" + money(daily) + otAdd;
+		rows[0][1] = "¥" + money(dailyToday) + otAdd;
 		rows[1][1] = "¥" + money(perHour) + otHourAdd;
 	}
 	for (const [k, v, color] of rows) {
