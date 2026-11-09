@@ -20,6 +20,8 @@ const path = require("node:path");
 const http = require("node:http");
 const fs = require("node:fs");
 const os = require("node:os");
+// 共享核心：尺寸表、默认配置、计薪口径都从 core 取，主进程不再自带副本。
+const Core = require("./core.js");
 
 // 独立的 userData：否则会与 dsh-pet 那个 helper 抢同一个 Electron 配置目录，
 // requestSingleInstanceLock() 拿不到锁就直接退出了（表现为"启动了但没窗口"）。
@@ -48,6 +50,41 @@ function log(...args) {
 	} catch {}
 }
 log("boot argv=", process.argv.slice(1).join(" "), "userData=", USER_DATA);
+
+/* ------------------------------------------------------------------ *
+ * 截图钩子（仅调试用）
+ *
+ * 正常运行时一个字节都不执行。设了环境变量才生效：
+ *   DSH_STAR_PET_SHOT=<png>            桌宠窗口
+ *   DSH_STAR_PET_SHOT_DELAY=ms         等多久再抓（默认 1800）
+ *   DSH_STAR_PET_SHOT_EXPAND=1         抓之前先合成一次点击，让看板展开
+ *   DSH_STAR_PET_SHOT_SETTINGS=<png>   设置窗口
+ *   DSH_STAR_PET_SHOT_EXIT=1           抓完退出进程
+ * 用途：没有 DSH 宿主时（CI、远程排查、冒烟脚本）验证界面长什么样。
+ */
+async function capture(win, out, before) {
+	try {
+		if (before) await before();
+		const img = await win.webContents.capturePage();
+		fs.writeFileSync(out, img.toPNG());
+		log("shot saved", out, JSON.stringify(img.getSize()));
+	} catch (e) {
+		log("shot failed", out, (e && e.stack) || String(e));
+	}
+}
+
+/** 合成一次指针按下/抬起，展开看板（与真实点击走同一条 hitTest 路径）。 */
+function synthClick(win) {
+	return win.webContents
+		.executeJavaScript(`(() => {
+			const el = document.getElementById("stage");
+			const base = { bubbles: true, pointerId: 9, button: 0, clientX: 300, clientY: 350, screenX: 300, screenY: 350 };
+			el.dispatchEvent(new PointerEvent("pointerdown", base));
+			window.dispatchEvent(new PointerEvent("pointerup", Object.assign({}, base)));
+			return "clicked";
+		})()`)
+		.then(() => new Promise((r) => setTimeout(r, 700)));
+}
 
 // ---------------------------------------------------------------- 启动参数
 
@@ -107,6 +144,9 @@ const PANEL_W = 344;
 // 必须与 renderer.js 的 PANEL_H 一致：加了「加班 / 倍率」一行后从 252 变 274
 const PANEL_H = 274;
 const GAP = 8;
+/** 宠物贴边时的默认边距（不再是配置项 —— 配置里没有 margin_* 这两个键）。 */
+const MARGIN_RIGHT = 22;
+const MARGIN_BOTTOM = 14;
 
 let pet = null;
 let visTimer = null; // 宠物主窗口
@@ -118,9 +158,6 @@ let state = {
 	expanded: false,
 	snapEnabled: true,
 	snapPx: 28,
-	snapSides: ["left", "right", "top", "bottom"],
-	marginRight: 22,
-	marginBottom: 14,
 	flipOnLeft: true,
 };
 
@@ -142,8 +179,8 @@ function defaultPosition(w, h) {
 	const display = screen.getPrimaryDisplay();
 	const wa = display.workArea;
 	return {
-		x: wa.x + wa.width - w - Math.round(state.marginRight),
-		y: wa.y + wa.height - h - Math.round(state.marginBottom),
+		x: wa.x + wa.width - w - MARGIN_RIGHT,
+		y: wa.y + wa.height - h - MARGIN_BOTTOM,
 	};
 }
 
@@ -208,11 +245,11 @@ function endDrag() {
 	const tol = Math.max(0, Number(state.snapPx) || 0);
 	let { x, y } = b;
 	if (state.snapEnabled) {
-		const sides = Array.isArray(state.snapSides) ? state.snapSides : ["left", "right", "top", "bottom"];
-		if (sides.includes("left") && Math.abs(x - wa.x) <= tol) x = wa.x;
-		if (sides.includes("right") && Math.abs(wa.x + wa.width - (x + b.width)) <= tol) x = wa.x + wa.width - b.width;
-		if (sides.includes("top") && Math.abs(y - wa.y) <= tol) y = wa.y;
-		if (sides.includes("bottom") && Math.abs(wa.y + wa.height - (y + b.height)) <= tol) y = wa.y + wa.height - b.height;
+		// 四边永远都吸（snap_sides 字段已按需求砍掉，不再有「只吸某几条边」的配置）。
+		if (Math.abs(x - wa.x) <= tol) x = wa.x;
+		if (Math.abs(wa.x + wa.width - (x + b.width)) <= tol) x = wa.x + wa.width - b.width;
+		if (Math.abs(y - wa.y) <= tol) y = wa.y;
+		if (Math.abs(wa.y + wa.height - (y + b.height)) <= tol) y = wa.y + wa.height - b.height;
 	}
 	const nb = clampToDisplay({ x, y, width: b.width, height: b.height }, display);
 	pet.setBounds(nb);
@@ -340,8 +377,7 @@ function openSettings() {
 	try {
 		// 加班分区让内容变高，原来固定 920 的上限会裁掉底部概览，改成贴着工作区上限
 		const cap = wa.height - 24;
-		const tall = Math.min(cap, wa.height - 24);
-		settings.setBounds({ x: Math.round(wa.x + (wa.width - w) / 2), y: Math.round(wa.y + (wa.height - tall) / 2), width: w, height: tall });
+		settings.setBounds({ x: Math.round(wa.x + (wa.width - w) / 2), y: Math.round(wa.y + (wa.height - cap) / 2), width: w, height: cap });
 		await new Promise((r) => setTimeout(r, 220));
 		const need = await measure();
 		const hh = Math.min(Math.max(Math.round(need), 420), cap);
@@ -367,7 +403,11 @@ process.on("uncaughtException", (e) => {
 process.on("unhandledRejection", (e) => {
 	log("unhandledRejection", (e && e.stack) || String(e));
 });
-app.on("window-all-closed", () => log("window-all-closed"));
+// 窗口全关 = 用户要退出（桌宠没有「主窗口」，关掉宠物窗就等于结束）。
+app.on("window-all-closed", () => {
+	log("window-all-closed → quit");
+	app.quit();
+});
 
 const gotLock = app.requestSingleInstanceLock();
 log("singleInstanceLock", gotLock);
@@ -384,7 +424,7 @@ if (!gotLock) {
 }
 
 log("whenReady, bootstrapping");
-/** 每 300ms 问一次宿主：进程还在不在、窗口该不该显示。 */
+/** 每 150ms 问一次宿主：进程还在不在、窗口该不该显示。 */
 function startVisibilityWatch() {
 	if (visTimer) clearInterval(visTimer);
 	visTimer = setInterval(async () => {
@@ -435,13 +475,10 @@ async function bootstrap() {
 		cfg = snap.config || {};
 		winState = snap.window || null;
 		Object.assign(state, {
-			petSize: cfg.pet_size_index != null ? [96, 108, 135][cfg.pet_size_index] || 135 : 135,
+			petSize: Core.petSizeOf(cfg.pet_size_index),
 			showChip: cfg.show_chip === true,
 			snapEnabled: cfg.snap_enabled !== false,
 			snapPx: Number(cfg.snap_px) || 28,
-			snapSides: Array.isArray(cfg.snap_sides) ? cfg.snap_sides : ["left", "right", "top", "bottom"],
-			marginRight: Number(cfg.margin_right) || 22,
-			marginBottom: Number(cfg.margin_bottom) || 14,
 			flipOnLeft: cfg.flip_on_left !== false,
 		});
 	} catch (e) {
@@ -530,6 +567,14 @@ async function bootstrap() {
 			cfg,
 			left: pos.x + w / 2 < screen.getPrimaryDisplay().workArea.x + screen.getPrimaryDisplay().workArea.width / 2,
 		});
+		if (process.env.DSH_STAR_PET_SHOT) {
+			const delay = Number(process.env.DSH_STAR_PET_SHOT_DELAY || 1800);
+			const expand = process.env.DSH_STAR_PET_SHOT_EXPAND === "1";
+			setTimeout(async () => {
+				await capture(pet, process.env.DSH_STAR_PET_SHOT, expand ? () => synthClick(pet) : null);
+				if (process.env.DSH_STAR_PET_SHOT_EXIT === "1") app.quit();
+			}, delay);
+		}
 	});
 
 	pet.on("closed", () => {
@@ -553,6 +598,15 @@ async function bootstrap() {
 	pet.webContents.on("preload-error", (_e, p, err) => log("preload error", p, err && err.message));
 	log("window created");
 	if (process.env.DSH_STAR_PET_OPEN_SETTINGS === "1") setTimeout(() => openSettings(), 900);
+	if (process.env.DSH_STAR_PET_SHOT_SETTINGS) {
+		setTimeout(async () => {
+			openSettings();
+			await new Promise((r) => setTimeout(r, 1500));
+			if (!settings || settings.isDestroyed()) return;
+			await capture(settings, process.env.DSH_STAR_PET_SHOT_SETTINGS);
+			if (process.env.DSH_STAR_PET_SHOT_EXIT === "1") app.quit();
+		}, 1200);
+	}
 }
 
 // ---------------------------------------------------------------- 自愈
@@ -655,11 +709,10 @@ ipcMain.handle("pet:apply", async (_e, patch) => {
 		const r = await request("POST", "/config", patch || {});
 		if (r && r.config) {
 			Object.assign(state, {
-				petSize: [96, 108, 135][r.config.pet_size_index] || state.petSize,
+				petSize: Core.petSizeOf(r.config.pet_size_index),
 				showChip: r.config.show_chip === true,
 				snapEnabled: r.config.snap_enabled !== false,
 				snapPx: Number(r.config.snap_px) || state.snapPx,
-				snapSides: Array.isArray(r.config.snap_sides) ? r.config.snap_sides : state.snapSides,
 				flipOnLeft: r.config.flip_on_left !== false,
 			});
 			const { w, h } = petWindowSize();
@@ -695,11 +748,4 @@ ipcMain.on("pet:resize", (_e, size) => {
 	const { w, h } = petWindowSize();
 	const b = pet.getBounds();
 	pet.setBounds(clampToDisplay({ x: b.x, y: b.y + b.height - h, width: w, height: h }, screen.getDisplayNearestPoint({ x: b.x, y: b.y })));
-});
-
-app.on("window-all-closed", () => app.quit());
-
-// 宿主（DSH）退出后自己退出：渲染端连续拿不到 /config 会发 pet:quit
-process.on("uncaughtException", (err) => {
-	console.error("[star-pet] uncaught:", err);
 });

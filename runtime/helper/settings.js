@@ -12,7 +12,7 @@ const S = window.starPet || {
 	openSettings: () => {},
 	quit: () => {},
 };
-const PET_SIZES = [96, 108, 135];
+const Core = window.StarPetCore;
 const WD = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 const FLAGS = [
 	["snap_enabled", "贴边吸附"],
@@ -23,83 +23,34 @@ const FLAGS = [
 	["show_float", "赚到飘字"],
 ];
 
-const DEFAULT = {
-	monthly_wage: 10000,
-	daily_wage: null,
-	pay_days_per_month: 21.75,
-	work_start: "09:00",
-	work_end: "17:00",
-	lunch_start: "11:30",
-	lunch_minutes: 90,
-	work_weekdays: [1, 2, 3, 4, 5],
-	holidays: [],
-	extra_workdays: [],
-	hide_on_rest_day: false,
-	pet_size_index: 1,
-	snap_enabled: true,
-	snap_px: 28,
-	snap_sides: ["left", "right", "top", "bottom"],
-	flip_on_left: true,
-	sound: true,
-	soft_font: true,
-	show_chip: false,
-	roll_numbers: true,
-	show_banter: true,
-	banter_every_sec: 30,
-	banter_mode: "workday",
-	show_float: true,
-	float_every_sec: 5,
-	// ── 加班（默认关闭）：独立时段，不接下班时间
-	// 加班日与上班日一样一周七天自己勾
-	overtime_enabled: false,
-	overtime_weekdays: [1, 2, 3, 4, 5],
-	overtime_start_workday: "19:00",
-	overtime_end_workday: "21:00",
-	overtime_start_weekend: "09:00",
-	overtime_end_weekend: "17:00",
-	overtime_rate_workday: "1.5",
-	overtime_rate_weekend: "2",
-	overtime_rate_holiday: "3",
-};
+/** 默认值只有一个来源：core.js 的 DEFAULT_CONFIG。 */
+const DEFAULT = Core.DEFAULT_CONFIG;
 
-/** 加班倍率的按钮：值 → 显示文字。没有「自动」了，三档各配一个。 */
-const RATES = [
-	["0", "0"],
-	["1", "1"],
-	["1.5", "1.5"],
-	["2", "2"],
-	["3", "3"],
-];
-/** 三档倍率字段 → 设置页里的标签。
- *  标签必须短到一行放得下（窗口内宽只有约 262px，右侧还要排 4 个按钮），
- *  所以「加班 ×倍工资」放在上面的小标题里，这里只写工作日/周末/节假日。 */
+
+/** 加班倍率的按钮：值 → 显示文字。 */
+const RATES = Core.OVERTIME_RATES.map((v) => [v, v]);
+/** 两档倍率字段 → 设置页里的标签。
+ *  标签必须短到一行放得下（窗口内宽只有约 262px，右侧还要排 5 个按钮），
+ *  所以「加班 ×倍工资」放在上面的小标题里，这里只写工作日/周末。 */
 const RATE_ROWS = [
 	["overtime_rate_workday", "工作日"],
 	["overtime_rate_weekend", "周末"],
-	["overtime_rate_holiday", "节假日"],
 ];
 
 let cfg = { ...DEFAULT };
 
-const parse = (s, d) => {
-	const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || "").trim());
-	return m ? Math.min(1439, +m[1] * 60 + +m[2]) : d;
-};
-const hhmm = (m) => {
-	const v = ((Math.round(m) % 1440) + 1440) % 1440;
-	return String(Math.floor(v / 60)).padStart(2, "0") + ":" + String(v % 60).padStart(2, "0");
-};
-/** Tk dur_short：分钟 → "H:MM"。 */
+// 解析 / 格式化 / 金额全部取自 core.js，不再各写一份。
+const parse = (s, d) => Core.parseHHMM(s, d);
+const hhmm = (m) => Core.fmtHHMM(m);
+const money = (v) => Core.money(v);
+/** 分钟 → "H:MM"。 */
 const durShort = (v) => {
 	const n = Math.max(0, Math.round(Number(v) || 0));
 	const h = Math.floor(n / 60);
 	const m = n % 60;
 	return h + ":" + String(m).padStart(2, "0");
 };
-const money = (v) =>
-	Number(v) >= 100000
-		? Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 })
-		: Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 
 function el(tag, cls, text) {
 	const d = document.createElement(tag);
@@ -112,11 +63,37 @@ function el(tag, cls, text) {
  *  min/max 可以是数字或函数（函数每次刷新实时求值，用于跨字段联动灰态）。
  *  任一字段变化后调用 refreshAll() 重算所有行的灰态。 */
 const _refreshFns = [];
-function refreshAll() {
-	for (const f of _refreshFns) f();
+/** 「本地日期」串，用来判断是否跨天：2026-11-09。 */
+function dayKey(d) {
+	return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate();
 }
 
-function stepper(host, label, get, set, step, fmt, _legacy, min, max) {
+/** 上一次渲染「今日概览」时用的日期。跨天后由 tickDay() 触发重算。 */
+let lastOvYmd = null;
+
+/** 设置窗口可能一直开着跨过零点（比如挂着不关）。概览里日薪、
+ *  加班时段、本月剩余天数都按「今天」算，跨天后必须重算一次，
+ *  否则显示的是昨天那套。只在日期真的变了时重算，平时零开销、无闪烁。 */
+function tickDay() {
+	if (lastOvYmd !== dayKey(new Date())) overview();
+}
+
+/** 重算所有步进器（灰态 + 值），然后刷新概览。
+ *  概览里的钱全都来自 cfg，任何一处 cfg 变了都必须重算，
+ *  否则会出现「倍率能实时变、薪资不变」这种半实时状态。 */
+function refreshAll() {
+	for (const f of _refreshFns) f();
+	overview();
+}
+
+/**
+ * 一行「标签 … [− 值 +]」步进器。
+ *   min/max 可以是数字或函数（每次刷新实时求值，用于跨字段联动）。
+ *   **跨字段联动会把当前值挤出合法区间**（比如调到午休 300 分钟后，
+ *   午休开始的上限变成 12:00，而值还停在 15:30），所以 refresh 里顺手夹回去，
+ *   保证界面上任何时刻看到的都是可保存的值。
+ */
+function stepper(host, label, get, set, step, fmt, min, max) {
 	const row = el("div", "row");
 	row.appendChild(el("div", "lab", label));
 	const grp = el("div", "grp");
@@ -126,10 +103,15 @@ function stepper(host, label, get, set, step, fmt, _legacy, min, max) {
 	const lo = () => (typeof min === "function" ? min() : typeof min === "number" ? min : 0);
 	const hi = () => (typeof max === "function" ? max() : typeof max === "number" ? max : null);
 	const refresh = () => {
-		const v = get();
+		const mx = hi();
+		let v = get();
+		const clamped = Math.min(mx == null ? v : mx, Math.max(lo(), v));
+		if (clamped !== v) {
+			set(clamped);
+			v = clamped;
+		}
 		val.textContent = fmt(v);
 		minus.classList.toggle("disabled", v <= lo());
-		const mx = hi();
 		plus.classList.toggle("disabled", mx != null && v >= mx);
 	};
 	minus.addEventListener("click", () => {
@@ -162,15 +144,14 @@ function build() {
 
 	const pay = document.getElementById("sec-pay");
 	pay.innerHTML = "";
-	stepper(pay, "月薪", () => Number(cfg.monthly_wage) || 0, (v) => (cfg.monthly_wage = Math.round(v * 100) / 100), 100, (v) => "¥" + Math.round(v).toLocaleString("en-US"), true);
-	// 月计薪天数：1 ~ 30（一个月最多 30 天，30 天 = 不扣周末，全月算薪）。
-	// 最小值 1 与 lib/index.js sanitizePatch 的 Math.max(1, ...) 对齐。
-	// 读取用「1~30 才采用」，不能用 `|| 21.75`——那样按到 0 会当场跳回 21.75。
+	// 月薪：步长 100，0 是合法值（待业）。上限只是防止手滑点到天文数字。
+	stepper(pay, "月薪", () => Number(cfg.monthly_wage) || 0, (v) => (cfg.monthly_wage = Math.round(v)), 100, (v) => "¥" + Math.round(v).toLocaleString("en-US"), 0, 10000000);
+	// 月计薪天数：1 ~ 30（一个月最多 30 天，30 天 = 不扣周末，全月算薪）。日薪 = 月薪 ÷ 它。
 	const payDaysGet = () => {
 		const v = Number(cfg.pay_days_per_month);
 		return Number.isFinite(v) && v >= 1 ? Math.min(30, v) : 21.75;
 	};
-	stepper(pay, "月计薪天数", payDaysGet, (v) => (cfg.pay_days_per_month = Math.max(1, Math.min(30, Math.round(v * 100) / 100))), 0.25, (v) => Number(v).toFixed(2), null, 1, 30);
+	stepper(pay, "月计薪天数", payDaysGet, (v) => (cfg.pay_days_per_month = Math.max(1, Math.min(30, Math.round(v * 100) / 100))), 0.25, (v) => Number(v).toFixed(2), 1, 30);
 
 	const time = document.getElementById("sec-time");
 	time.innerHTML = "";
@@ -185,88 +166,83 @@ function build() {
 
 	// 变灰规则（只变灰，不自动改值）：减号在 ≤下限时灰，加号在 ≥上限时灰。
 	// step：全部时间字段统一 15 分钟一档。
-	stepper(time, "上班", workStart, (v) => (cfg.work_start = hhmm(v)), 15, hhmm, null, 0, () => Math.min(workEnd() - 15, lunchStart()));
-	stepper(time, "下班", workEnd, (v) => (cfg.work_end = hhmm(v)), 15, hhmm, null, () => Math.max(workStart() + 15, lunchStart() + lunchMin()), () => Math.min(1439, otWStart()));
-	stepper(time, "午休开始", lunchStart, (v) => (cfg.lunch_start = hhmm(v)), 15, hhmm, null, () => workStart(), () => workEnd() - lunchMin());
-	stepper(time, "午休", lunchMin, (v) => (cfg.lunch_minutes = Math.min(300, Math.round(v))), 15, durShort, null, 0, () => Math.min(300, workEnd() - lunchStart()));
+	//
+	// 需求②要的是**开区间**：四段之间不能贴死（午休开始 == 上班、午休结束 == 下班
+	// 都会让某一段长度变成 0）。所以上下限都在边界上再让出 15 分钟，
+	// 让 UI 根本点不出非法组合；core.validateConfig 里还有同一套兜底。
+	// 例外：午休 0 分钟表示「不午休」，此时午休开始时间不参与任何计算，
+	// 不参加约束，否则中午连轴上班的人会被卡死。
+	const hasLunch = () => lunchMin() > 0;
+	stepper(time, "上班", workStart, (v) => (cfg.work_start = hhmm(v)), 15, hhmm, 0, () => (hasLunch() ? Math.min(workEnd() - 15, lunchStart() - 15) : workEnd() - 15));
+	stepper(time, "午休开始", lunchStart, (v) => (cfg.lunch_start = hhmm(v)), 15, hhmm, () => workStart() + 15, () => workEnd() - lunchMin() - 15);
+	stepper(time, "午休", lunchMin, (v) => (cfg.lunch_minutes = Math.min(300, Math.round(v))), 15, durShort, 0, () => Math.min(300, workEnd() - lunchStart() - 15));
+	stepper(time, "下班", workEnd, (v) => (cfg.work_end = hhmm(v)), 15, hhmm, () => (hasLunch() ? Math.max(workStart() + 15, lunchStart() + lunchMin() + 15) : workStart() + 15), 1439);
 
 	const wds = document.getElementById("wds");
 	const ot = document.getElementById("sec-ot");
 	ot.innerHTML = "";
-	// 开关在右键菜单里（默认关闭）；这里管「加班日 + 时段 + 三档倍率」
-	// 加班日：与上班日一样七天自选
+	// 开关在右键菜单里（默认关闭）；这里管「加班日 + 时段 + 两档倍率」
+	// 加班日：与上班日一样七天自选，**可以为空**
 	ot.appendChild(el("div", "note", "加班日"));
 	const otDaysWrap = el("div", "wds");
-	const wset = new Set((cfg.work_weekdays || [1, 2, 3, 4, 5]).map(Number));
-	const otSet = new Set((cfg.overtime_weekdays || [1, 2, 3, 4, 5]).map(Number));
+	const wset = new Set((cfg.work_weekdays || []).map(Number));
+	const otSet = new Set((cfg.overtime_weekdays || []).map(Number));
 
-	// 上班日 / 加班日里，周六(6)、周日(7)互斥：同一天不能既上班又加班。
-	// 点未选中的那一天时「抢占」：把对面那天的同一天让出来。
-	// 但如果让出来会让对面集合变空（例如加班日只有周六，却硬要把它改成上班日），
-	// 就拒绝这次点击——「加班日至少选一天」优先于抢占，否则会出现空加班日。
-	// 周一到周五不互斥（工作日晚上加班很正常）。
-	const renderWorkDays = () => {
-		wds.innerHTML = "";
+	/** 周六(6) / 周日(7) 一天只能算「上班日」或「加班日」之一。
+	 *  周一到周五允许两组共存（白天上班、晚上加班是常态）。
+	 *  两组都可以全空 —— 全空就是「这周一天班都不上 / 一天班都不加」。 */
+	const isWeekend = (day) => day >= 6;
+
+	/** 两个 Set 是唯一可改的状态；cfg 只是它们的投影，保存时 S.apply 提交。 */
+	function syncDays() {
+		cfg.work_weekdays = [...wset].sort((a, b) => a - b);
+		cfg.overtime_weekdays = [...otSet].sort((a, b) => a - b);
+	}
+
+	/** 点一下某天：已经在里面就移除，否则加入。
+	 *  周末加入时把对面同一天挪走 —— 这就是「互斥」，没有第三种状态。 */
+	function toggleDay(day, self, other) {
+		if (self.has(day)) {
+			self.delete(day);
+		} else {
+			if (isWeekend(day)) other.delete(day);
+			self.add(day);
+		}
+		syncDays();
+	}
+
+	/** 重画一组格子。只负责把 Set 画出来，不改状态。 */
+	function drawGrid(host, self, other) {
+		host.innerHTML = "";
 		WD.forEach((name, i) => {
 			const day = i + 1;
-			// 已经选中的永远可点（能取消）；未选中且对面占着才需要走抢占路径
-			const steal = !wset.has(day) && (day === 6 || day === 7) && otSet.has(day);
-			const blocked = steal && otSet.size <= 1;
-			const b = el("div", "wd" + (wset.has(day) ? " on" : "") + (blocked ? " disabled" : ""), name);
+			const b = el("div", "wd" + (self.has(day) ? " on" : ""), name);
 			b.addEventListener("click", () => {
-				if (blocked) return;
-				if (wset.has(day)) wset.delete(day);
-				else {
-					if (steal) otSet.delete(day); // 抢占：把这天从加班日里让出来
-					wset.add(day);
-				}
-				if (!wset.size) wset.add(day);
-				cfg.work_weekdays = [...wset].sort((a, c) => a - c);
-				cfg.overtime_weekdays = [...otSet].sort((a, c) => a - c);
-				renderWorkDays();
-				renderOtDays();
+				toggleDay(day, self, other);
+				renderDays();
 				overview();
 			});
-			wds.appendChild(b);
+			host.appendChild(b);
 		});
-	};
-	const renderOtDays = () => {
-		otDaysWrap.innerHTML = "";
-		WD.forEach((name, i) => {
-			const day = i + 1;
-			const steal = !otSet.has(day) && (day === 6 || day === 7) && wset.has(day);
-			const blocked = steal && wset.size <= 1;
-			const b = el("div", "wd" + (otSet.has(day) ? " on" : "") + (blocked ? " disabled" : ""), name);
-			b.addEventListener("click", () => {
-				if (blocked) return;
-				if (otSet.has(day)) otSet.delete(day);
-				else {
-					if (steal) wset.delete(day); // 抢占：把这天从上班日里让出来
-					otSet.add(day);
-				}
-				if (!otSet.size) otSet.add(day);
-				cfg.overtime_weekdays = [...otSet].sort((a, c) => a - c);
-				cfg.work_weekdays = [...wset].sort((a, c) => a - c);
-				renderWorkDays();
-				renderOtDays();
-				overview();
-			});
-			otDaysWrap.appendChild(b);
-		});
-	};
+	}
 
-	renderWorkDays();
+	function renderDays() {
+		drawGrid(wds, wset, otSet);
+		drawGrid(otDaysWrap, otSet, wset);
+	}
+
 	ot.appendChild(otDaysWrap);
-	renderOtDays();
+	renderDays();
 
-	// 上班日加班开始最早 = max(17:00, 下班)；结束最晚 23:59。
-	// 非上班日加班开始最早 05:00；结束最晚 23:59。
-	stepper(ot, "上班日加班开始", otWStart, (v) => (cfg.overtime_start_workday = hhmm(v)), 15, hhmm, null, () => Math.max(1020, workEnd()), () => otWEnd() - 15);
-	stepper(ot, "上班日加班结束", otWEnd, (v) => (cfg.overtime_end_workday = hhmm(v)), 15, hhmm, null, () => otWStart() + 15, 1439);
-	stepper(ot, "非上班日加班开始", otRStart, (v) => (cfg.overtime_start_weekend = hhmm(v)), 15, hhmm, null, 300, () => otREnd() - 15);
-	stepper(ot, "非上班日加班结束", otREnd, (v) => (cfg.overtime_end_weekend = hhmm(v)), 15, hhmm, null, () => otRStart() + 15, 1439);
+	// 加班时段：上班日那对只要求「整体在下班之后」，非上班日那对不设任何时间下限。
+	// （v1.2 硬编码了 17:00 和 05:00 两条下限，导致下班 16:00 的人无法加班、
+	//   周末早班 04:30 也被挡。）
+	stepper(ot, "上班日加班开始", otWStart, (v) => (cfg.overtime_start_workday = hhmm(v)), 15, hhmm, () => workEnd(), () => Math.max(workEnd(), otWEnd() - 15));
+	stepper(ot, "上班日加班结束", otWEnd, (v) => (cfg.overtime_end_workday = hhmm(v)), 15, hhmm, () => Math.max(workEnd(), otWStart() + 15), 1439);
+	stepper(ot, "非上班日加班开始", otRStart, (v) => (cfg.overtime_start_weekend = hhmm(v)), 15, hhmm, 0, () => Math.max(0, otREnd() - 15));
+	stepper(ot, "非上班日加班结束", otREnd, (v) => (cfg.overtime_end_weekend = hhmm(v)), 15, hhmm, () => Math.min(1439, otRStart() + 15), 1439);
 
-	// 加班 ×倍工资：工作日 / 周末 / 节假日 三行，各自 0 / 1.5 / 2 / 3
+	// 加班 ×倍工资：工作日 / 非上班日 两行，各自 0 / 1 / 1.5 / 2（3 倍已按需求删除）
 	ot.appendChild(el("div", "note", "加班 ×倍工资"));
 	for (const [key, label] of RATE_ROWS) {
 		const row = el("div", "row");
@@ -332,101 +308,63 @@ function build() {
 	overview();
 }
 
+/**
+ * 「今日概览」区：日薪 / 时薪 / 每秒 / 加班时薪 / 加班时段。
+ * 除「时薪」「每秒」是全天恒定的派生量外，其余都按「今天」这个日期算
+ * （日薪跟今天的上班日判定走、加班时段跟今天的加班窗口走），所以标题写「今日」。
+ * 前四行是绿字（基本工资），加班时薪与加班时段是蓝字（加班相关），
+ * 当天加班费不单独占行，直接跟在日薪后面（绿 + 蓝 同一行）。
+ * 数字全部由 core.snapshot 算出来 —— 与看板、与冒钱共用同一份口径，
+ * 设置页从此不可能再跟桌宠对不上账。
+ */
 function overview() {
+	const now = new Date();
 	const box = document.getElementById("ov");
 	box.innerHTML = "";
-	const start = parse(cfg.work_start, 540);
-	const end = parse(cfg.work_end, 1020);
-	const lunch = Math.max(0, Number(cfg.lunch_minutes) || 0);
-	const lunchStart = parse(cfg.lunch_start, 690);
-	// 只扣真正落在上下班区间内的午休（与 renderer.js 的 computeState 保持一致）。
-	const lunchOverlap = Math.max(0, Math.min(end, lunchStart + lunch) - Math.max(start, lunchStart));
-	const paid = Math.max(0, end - start - lunchOverlap);
-	// 与 renderer.js computeState 保持一致：只有「月薪没填」才回退 10000，
-	// 填 0 就是 0（否则设置页显示 ¥0、看板却按 1 万冒钱）。
-	const monthlyFilled = cfg.monthly_wage != null && String(cfg.monthly_wage).trim() !== "";
-	const monthly = monthlyFilled ? Math.max(0, Number(cfg.monthly_wage) || 0) : 10000;
-	const payDaysOf = () => {
-		const v = Number(cfg.pay_days_per_month);
-		return Number.isFinite(v) && v >= 1 ? Math.min(30, v) : 21.75;
-	};
-	const daily = cfg.daily_wage ? Number(cfg.daily_wage) : monthly / payDaysOf();
-	const perHour = paid > 0 ? daily / (paid / 60) : 0;
-	const perSec = paid > 0 ? daily / (paid * 60) : 0;
-	// 概览只列「钱」和「加班」：上班/下班/午休/计薪 在「时间」分区里已经有了，
-	// 这里再列一遍会把窗口撑到需要滚动（工作区上限 992，窗口最多约 968 高）。
-	const rows = [
-		["日薪", "¥" + money(daily), "#3ad17f"],
-		["时薪", "¥" + money(perHour), "#3ad17f"],
-		["每秒", "¥" + perSec.toFixed(4), "#3ad17f"],
-	];
-	// 「加班时段」这一行永远显示；只有「开了加班且今天是加班日」才显示具体时段，
-	// 否则一律「今日不宜加班」。值是按今天实际生效的那一对时段（上班日走上班日那对，非上班日走另一对）。
-	const otStartWorkday = parse(cfg.overtime_start_workday, 1140);
-	const otEndWorkday = parse(cfg.overtime_end_workday, 1260);
-	const otStartWeekend = parse(cfg.overtime_start_weekend, 540);
-	const otEndWeekend = parse(cfg.overtime_end_weekend, 1020);
-	// 今日倍率：与 renderer.js 的 isWorkday 完全一致 —— 补班日优先、节假日放假、
-	// 其余按上班日。之前只看 work_weekdays，漏了节假日/补班日，导致概览和
-	// 看板对「今天到底是上班日还是休息日、该用哪档倍率」判断不一致。
-	const now = new Date();
-	const dow = now.getDay() === 0 ? 7 : now.getDay();
-	const wset = new Set((cfg.work_weekdays || [1, 2, 3, 4, 5]).map(Number));
-	const holSet = new Set((cfg.holidays || []).map(String));
-	const extraSet = new Set((cfg.extra_workdays || []).map(String));
-	const ds =
-		now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0") + "-" + String(now.getDate()).padStart(2, "0");
-	const holidayToday = holSet.has(ds) && !extraSet.has(ds);
-	const workdayToday = extraSet.has(ds) ? true : (holidayToday ? false : wset.has(dow));
-	const rateKey = workdayToday
-		? "overtime_rate_workday"
-		: holidayToday
-			? "overtime_rate_holiday"
-			: "overtime_rate_weekend";
-	const todayRate = Math.max(0, Number(cfg[rateKey]) || 0);
-	const spanFrom = workdayToday ? otStartWorkday : otStartWeekend;
-	const spanTo = workdayToday ? otEndWorkday : otEndWeekend;
-	// 今天是不是加班日（和上班日各自独立选）
-	const oset = new Set((cfg.overtime_weekdays || [1, 2, 3, 4, 5]).map(Number));
-	const otDayToday = oset.has(dow);
-	// 日薪与看板同口径：上班日总有基本日薪；休息日只有「开了加班 + 今天是加班日
-	// + 倍率 > 0」才算这天有工资。倍率 0 是白加班，休息日本来没有基本工资，显示 0。
-	const dailyToday = workdayToday
-		? daily
-		: cfg.overtime_enabled === true && otDayToday && todayRate > 0
-			? daily
-			: 0;
-	rows[0][1] = "¥" + money(dailyToday);
-	// 只有「开了加班 + 今天是加班日 + 时段写反不算」才显示具体加班时段，否则今日不宜加班
-	const otActive = cfg.overtime_enabled === true && otDayToday && spanTo > spanFrom;
-	rows.push(["加班时段", otActive ? hhmm(spanFrom) + "→" + hhmm(spanTo) : "今日不宜加班", "#5b9cff"]);
-	if (otActive) {
-		// 蓝色追加的是「差价」：时薪 × (倍率 − 1)，只显示纯加班费。
-		// 倍率 ≤ 1 时差价为 0，就不在日薪/时薪里追加蓝色加班费。
-		const otPerHour = perHour * Math.max(0, todayRate - 1);
-		// 加班有效时长（分钟）：扣掉落在加班窗口里的午休。
-		// 与看板「窝囊费」同口径 —— 窝囊费就是加班工资，不含基本工资、不含午休。
-		const lunchStartMin = parse(cfg.lunch_start, 690);
-		const lunchEndMin = lunchStartMin + lunch;
-		const lunchIn = (a, b) => Math.max(0, Math.min(b, lunchEndMin) - Math.max(a, lunchStartMin));
-		const otSpanMin = Math.max(0, spanTo - spanFrom - lunchIn(spanFrom, spanTo));
-		// 加班工资 = 时薪 × (倍率 − 1) × 加班时长：只算「比正常工资多出来的部分」。
-		// 倍率 1 一分不多 = ¥0.00；倍率 2 多赚一份；倍率 3 多赚两份。
-		const otDaily = perHour * Math.max(0, todayRate - 1) * otSpanMin / 60;
-		// 只有真有多赚出来的钱才追加蓝字（倍率 1 时加班工资是 0，不显示 "+ ¥0.00"）。
-		const otAdd = otDaily > 0.005 ? "  <span style=\"color:#5b9cff\">+ ¥" + money(otDaily) + "</span>" : "";
-		const otHourAdd = otPerHour > 0.005 ? "  <span style=\"color:#5b9cff\">+ ¥" + money(otPerHour) + "</span>" : "";
-		rows[0][1] = "¥" + money(dailyToday) + otAdd;
-		rows[1][1] = "¥" + money(perHour) + otHourAdd;
-	}
-	for (const [k, v, color] of rows) {
-		box.appendChild(el("div", "k", k));
+	const model = Core.deriveModel(cfg);
+	const snap = Core.snapshot(model, now);
+	// 记下这次是按哪一天算的，供 tickDay() 判断是否跨零点。
+	lastOvYmd = dayKey(now);
+
+	const GREEN = "#3ad17f";
+	const BLUE = "#5b9cff";
+
+	/** 一行：绿字主值。extra 有值时在同一个格子里追加一段蓝字（如「日薪 + 加班费」）。 */
+	const putMoney = (key, main, extra) => {
+		box.appendChild(el("div", "k", key));
 		const val = el("div", "v");
-		val.style.color = color;
-		// 概览值可能带 <span>（蓝色追加加班费），用 innerHTML；纯文本行不含 HTML 字符，同样安全。
-		val.innerHTML = v;
+		const a = document.createElement("span");
+		a.textContent = "¥" + Core.money(main);
+		a.style.color = GREEN;
+		val.appendChild(a);
+		if (extra != null && extra > 0.005) {
+			const b = document.createElement("span");
+			b.textContent = " +¥" + Core.money(extra);
+			b.style.color = BLUE;
+			val.appendChild(b);
+		}
 		box.appendChild(val);
-	}
+	};
+	/** 一行纯文字：color 决定绿/蓝。 */
+	const putText = (key, text, color) => {
+		box.appendChild(el("div", "k", key));
+		const val = el("div", "v", text);
+		val.style.color = color;
+		box.appendChild(val);
+	};
+
+	// 排版：绿色（基础工资）在上，蓝色（加班相关）在下。
+	//   日薪 ¥459.77 +¥212.20   ← 加班费直接跟在日薪后面，不单独占一行
+	//   时薪 ¥70.73
+	//   每秒 ¥0.0196
+	//   加班时薪 ¥106.10        ← 倍率 × 时薪，是加班那一小时的**全部**所得
+	//   加班时段 19:00→21:00
+	// 注意「加班时薪」不能和「时薪」相加：106.10 里已经含了 1 倍底薪。
+	putMoney("日薪", snap.dayBase, snap.dayOt);
+	putMoney("时薪", model.perHour);
+	putText("每秒", "¥" + model.perSec.toFixed(4), GREEN);
+	if (snap.otWindowValid) putText("加班时薪", "¥" + Core.money(model.perHour * snap.otRate), BLUE);
+	putText("加班时段", snap.otWindowValid ? hhmm(snap.otStartMin) + "→" + hhmm(snap.otEndMin) : "今日不宜加班", BLUE);
 }
 
 function say(text) {
@@ -434,48 +372,11 @@ function say(text) {
 }
 
 async function save() {
-	// 完整时间链（无论加班开关开或关都校验）：
-	//   00:00 ≤ 上班 ≤ 午休开始 ≤ 午休结束 ≤ 下班 ≤ 上班日加班开始 < 加班结束 ≤ 23:59（且加班开始 ≥ 17:00）
-	//   非上班日：05:00 ≤ 加班开始 < 加班结束 ≤ 23:59
-	const ws = parse(cfg.work_start, 540);
-	const we = parse(cfg.work_end, 1020);
-	const ls = parse(cfg.lunch_start, 690);
-	const lm = Number(cfg.lunch_minutes) || 0;
-	const le = ls + lm;
-	if (we <= ws) {
-		say("下班时间必须晚于上班时间。");
-		return;
-	}
-	if (ls < ws) {
-		say("午休开始不能早于上班时间。");
-		return;
-	}
-	if (le > we) {
-		say("午休结束（午休开始 + 午休时长）不能晚于下班时间。");
-		return;
-	}
-	const otWS = parse(cfg.overtime_start_workday, 1140);
-	const otWE = parse(cfg.overtime_end_workday, 1260);
-	if (otWS < 1020) {
-		say("上班日加班开始不能早于 17:00。");
-		return;
-	}
-	if (otWS < we) {
-		say("上班日加班开始必须晚于下班时间。");
-		return;
-	}
-	if (otWE <= otWS) {
-		say("上班日加班结束必须晚于开始。");
-		return;
-	}
-	const otRS = parse(cfg.overtime_start_weekend, 540);
-	const otRE = parse(cfg.overtime_end_weekend, 1020);
-	if (otRS < 300) {
-		say("非上班日加班开始不能早于 05:00。");
-		return;
-	}
-	if (otRE <= otRS) {
-		say("非上班日加班结束必须晚于开始。");
+	// 校验规则与文案都在 core.validateConfig 里，宿主 POST /config 用的是同一份 ——
+	// 改规则只需要改一处，两端不可能给出互相矛盾的提示。
+	const problem = Core.validateConfig(cfg);
+	if (problem) {
+		say(problem);
 		return;
 	}
 	try {
@@ -512,4 +413,8 @@ window.addEventListener("DOMContentLoaded", async () => {
 	window.addEventListener("keydown", (e) => {
 		if (e.key === "Escape") window.close();
 	});
+
+	// 每 30 秒看一眼日期。跨零点时重算「今日概览」，其余时候立即返回，
+	// 不碰 DOM（所以不会跟用户正在调的值抢刷新）。
+	setInterval(tickDay, 30000);
 });

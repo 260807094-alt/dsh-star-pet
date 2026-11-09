@@ -3,3 +3,10 @@ node_modules/
 *.tgz
 .tmp-*
 .DS_Store
+
+# 自测产物
+test/.smoke/
+test/smoke-out.txt
+test/smoke-err.txt
+tools/*.log
+test/.gui-*/

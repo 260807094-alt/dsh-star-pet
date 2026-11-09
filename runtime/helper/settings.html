@@ -48,6 +48,24 @@
 	#scroll::-webkit-scrollbar-thumb { background: #2b3242; border-radius: 3px; }
 	.rule { height: 1px; background: #232a35; margin: 10px 0 6px; }
 	.sec-title { font-size: 10.667px; color: #5d6675; margin: 0 0 2px; }
+	/* 分区标题右侧的小问号：悬停显示说明。用 span 而非 title 属性，
+	   因为 title 在无边框窗口里出得慢、样式不可控。 */
+	.sec-head { display: flex; align-items: center; gap: 4px; margin: 0 0 2px; }
+	.sec-head .sec-title { margin: 0; }
+	.tip { position: relative; display: inline-flex; align-items: center; justify-content: center;
+		width: 12px; height: 12px; border-radius: 50%; background: #232a35; color: #7d8798;
+		font-size: 9px; line-height: 1; cursor: default; user-select: none; }
+	.tip:hover { background: #2b3242; color: #e9eef8; }
+	.tip .bubble {
+		display: none; position: absolute; left: 14px; top: -4px; z-index: 10;
+		/* 宽度受限于内容内宽 262px（窗口 322 − 描边 2 − 左右 padding 60）：
+		   问号右边还有约 189px，取 176px 留余量，避免 #scroll 出横向滚动条。 */
+		width: 176px; padding: 6px 8px; border-radius: 5px;
+		background: #0f1318; color: #c8d0dd; border: 1px solid #2b3242;
+		font-size: 11px; line-height: 16px; white-space: normal; text-align: left;
+		box-shadow: 0 4px 14px rgba(0,0,0,.45);
+	}
+	.tip:hover .bubble { display: block; }
 	/* _stepper：label 左，[− 值 +] 组靠右 */
 	.row { display: flex; align-items: center; margin: 3px 0; }
 	.row .lab { flex: 1; font-size: 13.333px; color: #e9eef8; }
@@ -70,9 +88,8 @@
 		background: #1b212a; color: #7d8798; border-radius: 3px; cursor: default;
 	}
 	.wd.on { background: #1d3a2b; color: #3ad17f; }
-	.wd.disabled { background: #15191f; color: #3a4350; }
 	.flags { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 6px 0 0; }
-	/* 加班倍率：5 个等宽按钮，选中态与上班日/开关一致 */
+	/* 加班倍率：4 个等宽按钮（0/1/1.5/2），选中态与上班日/开关一致 */
 	.rates { display: flex; gap: 3px; }
 	.rate {
 		min-width: 34px; text-align: center; padding: 4px 6px; font-size: 12px;
@@ -118,14 +135,16 @@
 					<div class="sec-title">上班日</div>
 					<div class="wds" id="wds"></div>
 					<div class="rule"></div>
-					<div class="sec-title">加班</div>
 					<div id="sec-ot"></div>
 					<div class="rule"></div>
 					<div class="sec-title">外观</div>
 					<div id="sec-look"></div>
 					<div class="flags" id="flags"></div>
 					<div class="rule"></div>
-					<div class="sec-title">概览</div>
+					<div class="sec-head">
+						<div class="sec-title">今日概览</div>
+						<div class="tip">?<div class="bubble">时薪不包含午休，只算实际上班时间。</div></div>
+					</div>
 					<div id="ov"></div>
 					<div id="msg"></div>
 				</div>
@@ -137,6 +156,7 @@
 			</div>
 		</div>
 	</div>
+	<script src="./core.js"></script>
 	<script src="./settings.js"></script>
 </body>
 </html>

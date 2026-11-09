@@ -5,7 +5,7 @@
  * 选中后立即写回配置，主窗 250ms 轮询会自动跟上。
  */
 const S = window.starPet;
-const PET_SIZES = [96, 108, 135];
+const Core = window.StarPetCore;
 const kind = new URLSearchParams(location.search).get("kind") === "sizes" ? "sizes" : "menu";
 
 let cfg = {};
@@ -105,8 +105,8 @@ async function buildSizes() {
 	title.textContent = "大小";
 	box.appendChild(title);
 
-	const cur = Number.isInteger(cfg.pet_size_index) ? cfg.pet_size_index : 1;
-	PET_SIZES.forEach((px, i) => {
+	const cur = Number.isInteger(cfg.pet_size_index) ? cfg.pet_size_index : Core.PET_SIZE_INDEX;
+	Core.PET_SIZES.forEach((px, i) => {
 		const cell = document.createElement("div");
 		cell.className = "cell" + (i === cur ? " on" : "");
 		cell.textContent = String(px);
