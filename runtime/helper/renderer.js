@@ -394,16 +394,17 @@ function buildPanel() {
 function refreshPanel(snap) {
 	// 大金额做「数字滚动」：向目标值逼近，差得少就直接吸附到位（避免尾数抖动）。
 	// v1.2 的 roll_numbers 开关已按需求删除，这里固定开启。
-	// 滚的是「今天到此刻已赚」的总额；绿/蓝两段按同一个进度比拆分，
-	// 保证滚动过程中两段之和恒等于总额，不会出现半绿半蓝对不上的瞬间。
+	// 滚的是「今天到此刻已赚」的总额。
 	const target = snap.earned;
 	if (Math.abs(target - st.display) < 0.02) st.display = target;
 	else st.display += (target - st.display) * 0.32;
 
-	// 拆分比例：总额里加班费占多少。总额为 0 时全算基本（都是 0）。
-	const otShare = snap.earned > 0 ? snap.earnedOt / snap.earned : 0;
-	const shownOt = st.display * otShare;
-	const shownBase = st.display - shownOt;
+	// 绿段 = 基本工资已达成的部分，蓝段 = 剩下的（加班费）。
+	// 不要按 earnedOt/earned 的比例切分：那样两段都在动，各自四舍五入后
+	// 会在相邻两分钱之间来回跳（绿色 505.73/505.75 抖动即此）。
+	// 改成绿段取定值、蓝段吸收滚动的落后量，绿字就稳定不动了。
+	const shownBase = Math.min(snap.earnedBase, st.display);
+	const shownOt = st.display - shownBase;
 
 	const baseTxt = "¥" + money(Math.round(shownBase * 100) / 100);
 	setText(P.moneyBase, baseTxt);

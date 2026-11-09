@@ -1,6 +1,6 @@
 {
   "name": "dsh-star-pet",
-  "version": "1.3.1",
+  "version": "1.3.0",
   "description": "上班鼓励宠物（加班版）：桌面透明置顶的困困星人，实时显示今天已经赚了多少钱，支持加班时段与 0/1/1.5/2 加班倍率。",
   "icon": "icon.png",
   "author": "dsh-star-pet",
