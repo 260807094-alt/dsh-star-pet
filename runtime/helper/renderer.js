@@ -456,8 +456,8 @@ function refreshPanel(snap) {
 	// 上班日 → 上下班时间；加班日 → 加班时段（工作日那对或非上班日那对）；
 	// 非上班日又不加班 → 今天没有时段可言，显示「—」，
 	// 否则会出现「今天休息」却还写着 09:00 / 17:00 的矛盾显示。
-	const dow = snap.now.getDay() === 0 ? 7 : snap.now.getDay();
-	const spanOtToday = snap.model.otOn && snap.model.otDays.includes(dow) && snap.otEndMin > snap.otStartMin;
+	// 上下班格与加班格共用同一个判定，不再各自重算一遍条件。
+	const spanOtToday = snap.otWindowValid;
 	if (snap.workday) {
 		setText(P.startat, fmtHHMM(snap.model.startMin));
 		setText(P.endat, fmtHHMM(snap.model.endMin));
@@ -470,11 +470,11 @@ function refreshPanel(snap) {
 	}
 	// 加班时段 + 窝囊费：窝囊费就是今天的加班工资（加班多受的那份气换来的钱）。
 	// 不加班就是 0。它和上面「日薪」格互不重叠：日薪格只放基础日薪。
-	// 时段显示：只要加班开着且窗口有效就显示时间（倍率 0 也显示，否则"加班中"却"关闭"矛盾）
-	const otWinOn = snap.model.otOn && snap.otEndMin > snap.otStartMin;
-	const a1 = otWinOn ? fmtHHMM(snap.otStartMin) : "—";
-	const a2 = otWinOn ? fmtHHMM(snap.otEndMin) : "—";
-	const spanTxt = otWinOn ? a1 + "→" + a2 : "关闭";
+	// 时段显示：今天是加班日且窗口有效 → 显示时间（倍率 0 也显示，否则"加班中"却"关闭"矛盾）；
+	// 加班总开关开着但今天不是加班日 → 「今天不加」，和设置页「今日不宜加班」同义。
+	const spanTxt = snap.otWindowValid
+		? fmtHHMM(snap.otStartMin) + "→" + fmtHHMM(snap.otEndMin)
+		: snap.model.otOn ? "今天不加" : "关闭";
 	setText(P.otspan, spanTxt);
 	// 窝囊费格：今天这天的加班费（= snapshot.dayOt）。
 	// 彩蛋：开着加班但两档倍率全是 0 —— 加班一分钱不给，这一天纯窝囊。
