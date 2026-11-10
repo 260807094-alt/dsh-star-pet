@@ -46,6 +46,14 @@ const api = {
 	req(method, path, body) {
 		return ipcRenderer.invoke("pet:request", { method, path, body });
 	},
+	/** 读本插件 package.json 的版本号（单一来源，不依赖宿主进程） */
+	getVersion() {
+		try {
+			const fs = require("fs");
+			const path = require("path");
+			return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "package.json"), "utf8")).version || "";
+		} catch { return ""; }
+	},
 	openSettings() {
 		ipcRenderer.send("pet:open-settings");
 	},
