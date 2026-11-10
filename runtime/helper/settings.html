@@ -38,6 +38,8 @@
 	#close { -webkit-app-region: no-drag; }
 	#scroll, #bar, #msg, button, .step, .wd, .flag { -webkit-app-region: no-drag; }
 	#head h1 { margin: 0; font-size: 18.667px; font-weight: 700; color: #e9eef8; }
+	#head h1 .ver { font-size: 9px; font-weight: 400; color: #5d6675; margin-left: 3px;
+		position: relative; top: 4px; letter-spacing: .2px; }
 	#close { font-size: 14.667px; color: #7d8798; cursor: default; padding: 0 4px; }
 	#close:hover { color: #e9eef8; }
 	#scroll { flex: 1; overflow-y: auto; padding-right: 2px; display: flex; flex-direction: column; }
@@ -58,11 +60,12 @@
 	.tip:hover { background: #2b3242; color: #e9eef8; }
 	.tip .bubble {
 		display: none; position: absolute; left: 14px; top: -4px; z-index: 10;
-		/* 宽度受限于内容内宽 262px（窗口 322 − 描边 2 − 左右 padding 60）：
-		   问号右边还有约 189px，取 176px 留余量，避免 #scroll 出横向滚动条。 */
-		width: 176px; padding: 6px 8px; border-radius: 5px;
+		/* 一行显示完：nowrap + max-content 按文字自适应宽度；超长用省略号兜底，
+		   绝不折行、也绝不撑出 #scroll 的横向滚动条。 */
+		width: max-content; max-width: 208px; overflow: hidden; text-overflow: ellipsis;
+		padding: 6px 8px; border-radius: 5px;
 		background: #0f1318; color: #c8d0dd; border: 1px solid #2b3242;
-		font-size: 11px; line-height: 16px; white-space: normal; text-align: left;
+		font-size: 11px; line-height: 16px; white-space: nowrap; text-align: left;
 		box-shadow: 0 4px 14px rgba(0,0,0,.45);
 	}
 	.tip:hover .bubble { display: block; }
@@ -122,7 +125,7 @@
 <body>
 	<div id="shell">
 		<div id="body">
-			<div id="head"><h1>设置</h1><span id="close">✕</span></div>
+			<div id="head"><h1>设置<span class="ver" id="ver"></span></h1><span id="close">✕</span></div>
 			<div id="scroll">
 				<div id="content">
 					<div class="rule" style="margin-top:0"></div>

@@ -396,6 +396,8 @@ window.addEventListener("DOMContentLoaded", async () => {
 	try {
 		const r = await S.req("GET", "/config");
 		if (r && r.config) cfg = { ...DEFAULT, ...r.config };
+		const verEl = document.getElementById("ver");
+		if (verEl) verEl.textContent = r && r.appVersion ? "v" + r.appVersion : "";
 	} catch (e) {
 		say("读取配置失败，显示的是默认值。");
 	}
