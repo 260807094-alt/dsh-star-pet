@@ -147,6 +147,9 @@ const GAP = 8;
 /** 宠物贴边时的默认边距（不再是配置项 —— 配置里没有 margin_* 这两个键）。 */
 const MARGIN_RIGHT = 22;
 const MARGIN_BOTTOM = 14;
+/** 「算不算贴死屏幕边」的判定余量（px），只用来吃掉 setBounds 的取整误差。
+ *  和吸附范围无关：吸附是 snap_px 的职责，判定贴边是这 2px 的职责。 */
+const EDGE_EPS = 2;
 
 let pet = null;
 let visTimer = null; // 宠物主窗口
@@ -157,9 +160,8 @@ let state = {
 	showChip: false,
 	expanded: false,
 	snapEnabled: true,
-	snapPx: 28,
+	snapPx: 30,
 	flipOnLeft: true,
-	dockHide: false, // 贴边躲藏：贴边时把窗口强制吸死到屏幕边
 };
 
 function petWindowSize() {
@@ -253,36 +255,33 @@ function endDrag() {
 		if (Math.abs(wa.y + wa.height - (y + b.height)) <= tol) y = wa.y + wa.height - b.height;
 	}
 	let nb = clampToDisplay({ x, y, width: b.width, height: b.height }, display);
-	// 贴边躲藏开着时，只要落在贴边容差内就必须真的贴死屏幕边：
-	// 容差只用来容忍手抖，不能当成「半路就算贴上了」，否则躲起来只剩的
-	// 那颗星星会悬在离屏幕边十几像素的空气里。这一步无视 snap_enabled。
-	if (state.dockHide && enforceEdge(nb, wa, state.snapPx)) {
-		nb = clampToDisplay(nb, display);
-	}
 	pet.setBounds(nb);
 	// 贴到屏幕左半边 → 整只镜像（渲染端按这个布尔翻转）
 	const left = nb.x + nb.width / 2 < wa.x + wa.width / 2;
 	request("POST", "/window", { x: nb.x, y: nb.y }).catch(() => {});
-	pet.webContents.send("pet:flip", { left, edge: edgeOf(nb, wa, state.snapPx) });
+	pet.webContents.send("pet:flip", { left, edge: edgeOf(nb, wa) });
 	return { x: nb.x, y: nb.y, left };
 }
 
-/** 窗口是否贴死在屏幕左/右边缘（贴边躲藏用；上下边不做）。
- *  容差沿用 snapPx，但给 24px 下限 —— 关掉「贴边吸附」后 snapPx 可能是 0，
- *  若照搬 0 就等于「必须像素级对齐才算是贴边」，躲藏从此永远触发不了。
- *  24px 与吸附默认值 28 接近，人工拖到边上必然落在里面。 */
-function edgeOf(b, wa, tol) {
-	const t = Math.max(24, Number(tol) || 0);
-	if (Math.abs(b.x - wa.x) <= t) return "left";
-	if (Math.abs(wa.x + wa.width - (b.x + b.width)) <= t) return "right";
+/** 窗口是否真的贴死在屏幕左/右边缘（贴边躲藏用；上下边不做）。
+ *  这里只问「是不是已经在边上」，容差不参与 —— 判定范围就是 EDGE_EPS 这两个像素，
+ *  用来吃掉 setBounds 的取整误差。把窗口挪到边上是「吸附」的职责，
+ *  躲藏自己绝不挪窗口，否则关掉吸附却仍然会吸，两套逻辑就打架了。 */
+function edgeOf(b, wa) {
+	if (Math.abs(b.x - wa.x) <= EDGE_EPS) return "left";
+	if (Math.abs(wa.x + wa.width - (b.x + b.width)) <= EDGE_EPS) return "right";
 	return null;
 }
 
-/** 把窗口真的吸到屏幕左/右边缘（原地改 b.x），返回吸到了哪条边。
- *  吸附与躲藏的关系：吸附负责「贴上边」，躲藏只负责「贴上之后跳进去」。
- *  所以躲藏开着时，凡是被 edgeOf 判为贴边的位置，都必须先走这一步贴死。 */
-function enforceEdge(b, wa, tol) {
-	const edge = edgeOf(b, wa, tol);
+/** 在吸附范围内就把窗口吸死到屏幕左/右边缘（原地改 b.x），返回吸到了哪条边。
+ *  这是「吸附」的职责，只认 snap_enabled 与 snap_px：
+ *  关掉吸附就一行都不吸 —— 此时躲藏只对「手动拖到贴合边」的窗口生效。 */
+function snapToEdge(b, wa, tol) {
+	if (!state.snapEnabled) return null;
+	const t = Math.max(0, Number(tol) || 0);
+	let edge = null;
+	if (Math.abs(b.x - wa.x) <= t) edge = "left";
+	else if (Math.abs(wa.x + wa.width - (b.x + b.width)) <= t) edge = "right";
 	if (edge === "left") b.x = wa.x;
 	if (edge === "right") b.x = wa.x + wa.width - b.width;
 	return edge;
@@ -509,9 +508,8 @@ async function bootstrap() {
 			petSize: Core.petSizeOf(cfg.pet_size_index),
 			showChip: cfg.show_chip === true,
 			snapEnabled: cfg.snap_enabled !== false,
-			snapPx: Number(cfg.snap_px) || 28,
+			snapPx: Number.isFinite(Number(cfg.snap_px)) ? Number(cfg.snap_px) : 30,
 			flipOnLeft: cfg.flip_on_left !== false,
-			dockHide: cfg.dock_hide === true,
 		});
 	} catch (e) {
 		// 宿主还没起来：用默认值先起窗，之后渲染端会重试拿配置
@@ -528,9 +526,9 @@ async function bootstrap() {
 			? screen.getDisplayNearestPoint({ x: Math.round(rawPos.x), y: Math.round(rawPos.y) })
 			: screen.getPrimaryDisplay();
 	let pos = clampToDisplay({ x: Math.round(rawPos.x), y: Math.round(rawPos.y), width: w, height: h }, targetDisplay);
-	// 贴边躲藏开着时，启动位置若落在贴边容差内也要先贴死屏幕边：
-	// 默认落点故意留了 MARGIN_RIGHT=22，正好在容差里，不吸的话躲起来那颗星会悬空。
-	if (state.dockHide && enforceEdge(pos, targetDisplay.workArea, state.snapPx)) {
+	// 启动位置也要走一次吸附（与拖拽松手同一套规则），否则「上次留在吸附范围内」
+	// 的窗口这次启动会停在离边十几像素的地方。
+	if (state.snapEnabled && snapToEdge(pos, targetDisplay.workArea, state.snapPx)) {
 		pos = clampToDisplay(pos, targetDisplay);
 	}
 	log("display", JSON.stringify({ scale: targetDisplay.scaleFactor, workArea: targetDisplay.workArea, size: targetDisplay.size }), "raw", JSON.stringify(rawPos), "clamped", JSON.stringify(pos));
@@ -605,7 +603,7 @@ async function bootstrap() {
 			cfg,
 			left: pos.x + w / 2 < wa0.x + wa0.width / 2,
 			// 启动时就贴着屏幕左右边 → 直接进入躲藏（否则要等用户拖一次才生效）
-			edge: edgeOf({ x: pos.x, y: pos.y, width: w, height: h }, wa0, state.snapPx),
+			edge: edgeOf({ x: pos.x, y: pos.y, width: w, height: h }, wa0),
 		});
 		if (process.env.DSH_STAR_PET_SHOT) {
 			const delay = Number(process.env.DSH_STAR_PET_SHOT_DELAY || 1800);
@@ -748,31 +746,30 @@ ipcMain.handle("pet:apply", async (_e, patch) => {
 	try {
 		const r = await request("POST", "/config", patch || {});
 		if (r && r.config) {
-			const dockWas = state.dockHide;
 			Object.assign(state, {
 				petSize: Core.petSizeOf(r.config.pet_size_index),
 				showChip: r.config.show_chip === true,
 				snapEnabled: r.config.snap_enabled !== false,
-				snapPx: Number(r.config.snap_px) || state.snapPx,
+				snapPx: Number.isFinite(Number(r.config.snap_px)) ? Number(r.config.snap_px) : state.snapPx,
 				flipOnLeft: r.config.flip_on_left !== false,
-				dockHide: r.config.dock_hide === true,
 			});
 			const { w, h } = petWindowSize();
 			if (pet && !pet.isDestroyed()) {
 				const b = pet.getBounds();
 				const display = screen.getDisplayNearestPoint({ x: b.x, y: b.y });
 				let nb = clampToDisplay({ x: b.x, y: b.y - (h - b.height), width: w, height: h }, display);
-				// 刚打开贴边躲藏时也补一次吸附，避免「开关一开就悬空着躲」。
-				if (state.dockHide && enforceEdge(nb, display.workArea, state.snapPx)) {
+				// 改配置（含打开吸附、调大吸附范围）后也补一次吸附，
+				// 规则与拖拽松手完全相同：只看 snap_enabled 与 snap_px。
+				if (state.snapEnabled && snapToEdge(nb, display.workArea, state.snapPx)) {
 					nb = clampToDisplay(nb, display);
 				}
 				pet.setBounds(nb);
-				// 开/关躲藏都会改变贴边状态，主进程这边要重新告诉渲染端一次，
+				// 开/关躲藏、或吸附把窗口挪到边上，都会改变贴边状态，要重新告诉渲染端，
 				// 否则渲染端只能等下一次拖拽才知道该不该躲。
-				if (state.dockHide !== dockWas) {
+				{
 					pet.webContents.send("pet:flip", {
 						left: nb.x + nb.width / 2 < display.workArea.x + display.workArea.width / 2,
-						edge: edgeOf(nb, display.workArea, state.snapPx),
+						edge: edgeOf(nb, display.workArea),
 					});
 				}
 				// 立刻把新配置推给渲染端：菜单/设置页改完不必等 1s 轮询，
@@ -808,8 +805,9 @@ ipcMain.on("pet:resize", (_e, size) => {
 	const b = pet.getBounds();
 	const display = screen.getDisplayNearestPoint({ x: b.x, y: b.y });
 	let nb = clampToDisplay({ x: b.x, y: b.y + b.height - h, width: w, height: h }, display);
-	// 换尺寸会改变窗口宽度，贴着边时不能因此离开屏幕边（否则躲藏就断了）。
-	if (state.dockHide && enforceEdge(nb, display.workArea, state.snapPx)) {
+	// 换尺寸会改变窗口宽度，原本贴死的窗口会因此离开屏幕边（躲藏就断了）。
+	// 这里用吸附同一套规则补一次：贴边是「吸」出来的，不是尺寸变化顺手蹭到的。
+	if (state.snapEnabled && snapToEdge(nb, display.workArea, state.snapPx)) {
 		nb = clampToDisplay(nb, display);
 	}
 	pet.setBounds(nb);

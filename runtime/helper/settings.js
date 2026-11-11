@@ -268,7 +268,7 @@ function build() {
 
 	const look = document.getElementById("sec-look");
 	look.innerHTML = "";
-	stepper(look, "吸附范围", () => Number(cfg.snap_px) || 0, (v) => (cfg.snap_px = Math.max(0, Math.min(200, Math.round(v)))), 2, (v) => Math.round(v) + " px");
+	stepper(look, "吸附范围", () => Number(cfg.snap_px) || 0, (v) => (cfg.snap_px = Math.max(0, Math.min(150, Math.round(v)))), 10, (v) => Math.round(v) + " px");
 	stepper(look, "冒钱间隔", () => Number(cfg.float_every_sec) || 5, (v) => (cfg.float_every_sec = Math.max(1, Math.min(10, Math.round(v)))), 1, (v) => Math.round(v) + " 秒");
 	stepper(look, "吐槽间隔", () => Number(cfg.banter_every_sec) || 30, (v) => (cfg.banter_every_sec = Math.max(5, Math.min(120, Math.round(v)))), 5, (v) => Math.round(v) + " 秒");
 

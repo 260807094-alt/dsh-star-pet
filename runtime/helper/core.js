@@ -39,7 +39,7 @@
 		// 外观
 		pet_size_index: 1,
 		snap_enabled: true,
-		snap_px: 28,
+		snap_px: 30,
 		flip_on_left: true,
 		sound: true,
 		soft_font: true,
@@ -174,7 +174,7 @@
 		}
 		if (out.lunch_minutes != null) out.lunch_minutes = clamp(Math.round(num(out.lunch_minutes, 0)), 0, 300);
 		if (out.pet_size_index != null) out.pet_size_index = clamp(Math.round(num(out.pet_size_index, 1)), 0, 2);
-		if (out.snap_px != null) out.snap_px = clamp(Math.round(num(out.snap_px, 0)), 0, 200);
+		if (out.snap_px != null) out.snap_px = clamp(Math.round(num(out.snap_px, 0)), 0, 150);
 		if (out.banter_every_sec != null) out.banter_every_sec = clamp(Math.round(num(out.banter_every_sec, 30)), 5, 120);
 		if (out.float_every_sec != null) out.float_every_sec = clamp(Math.round(num(out.float_every_sec, 5)), 1, 10);
 		if (out.banter_mode != null) out.banter_mode = out.banter_mode === "allday" ? "allday" : "workday";

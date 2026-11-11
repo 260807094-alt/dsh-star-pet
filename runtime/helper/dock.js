@@ -131,8 +131,10 @@
 	const TUCKED = "tucked";
 	const OUT = "jumping-out";
 
-	/** 隐藏后重新躲回的延迟（ms）：鼠标离开后 0.6s 才收 */
-	const HIDE_DELAY = 600;
+	/** 鼠标离开热区后，再躲回去的延迟（ms）。
+	 *  给足 3 秒：宠物弹出来是为了让人点它，0.6 秒太仓促 ——
+	 *  鼠标稍微抖出热区一下，整只就缩回去了，根本来不及选中。 */
+	const HIDE_DELAY = 3000;
 
 	/**
 	 * 创建一个躲藏控制器。
@@ -227,6 +229,9 @@
 				// JUMP_OUT：0=躲好 → 末=露出
 				if (reachedEnd) {
 					S.state = IDLE;
+					// 此刻才「完全露出来」。若鼠标已离开，就从现在起算 3 秒，
+					// 保证「触发一次出来就露够 3 秒再回」。
+					if (!S.hover && S.edge) S.hideAt = now() + HIDE_DELAY;
 				} else {
 					S.state = TUCKED;
 				}
@@ -291,11 +296,9 @@
 			} else {
 				// 离开热区
 				S.armed = true;
-				if (S.state === OUT && S.anim) {
-					// 弹到一半走了 → 就地把「跳出来」倒放回洞里
-					S.anim.dir = -1;
-					applyNow();
-				} else if (S.state === IDLE && S.edge) {
+				// 若正「跳出来」(OUT) 时鼠标走了：不打断动画，照样走完，
+				// 并露够 3 秒再回 —— 计时由 finish() 在完全露出时起。
+				if (S.state === IDLE && S.edge) {
 					// 已经露出来了，离开后稍等再躲回去
 					S.hideAt = now() + HIDE_DELAY;
 				}
