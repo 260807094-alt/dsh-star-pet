@@ -35,7 +35,11 @@ eq("默认不含 holidays", D.holidays, undefined);
 eq("默认不含 extra_workdays", D.extra_workdays, undefined);
 eq("默认不含 snap_sides", D.snap_sides, undefined);
 eq("默认不含 overtime_rate_holiday", D.overtime_rate_holiday, undefined);
-eq("配置键总数", Core.CONFIG_KEYS.length, 27);
+eq("配置键总数", Core.CONFIG_KEYS.length, 32);
+// 面板显示开关默认全开（只有显式 false 才隐藏）
+for (const k of ["show_perhour", "show_daybase", "show_monthearned", "show_pouch", "show_monthremain"]) {
+	eq("默认开启 " + k, D[k], true);
+}
 
 const now = new Date(2026, 10, 9, 14, 0, 0); // 2026-11-09 周一 14:00
 const m = Core.deriveModel(D);
@@ -113,6 +117,43 @@ const sPlain = Core.snapshot(Core.deriveModel(cfgPlain), new Date(2026, 10, 9, 1
 eq("13:30 已工作(秒)", sPlain.worked, 180 * 60, 0.5);
 eq("13:30 已赚", sPlain.earned, (10000 / 21.75) * (180 / 390), 0.01);
 eq("13:30 剩余(秒)", sPlain.remaining, (390 - 180) * 60, 0.5);
+
+/* ---------------- 进度条 barProgress：加班时段要重新走 ---------------- */
+// progress 还驱动 earnedBase / remDays，语义不能动；barProgress 只给进度条和胶囊用。
+const otCfg = {
+	...D,
+	overtime_enabled: true,
+	overtime_weekdays: [1],
+	overtime_start_workday: "19:00",
+	overtime_end_workday: "21:00",
+	overtime_rate_workday: "1.5",
+};
+const otModel = Core.deriveModel(otCfg);
+const atOt = (hh, mm) => Core.snapshot(otModel, new Date(2026, 10, 9, hh, mm, 0));
+eq("17:30 已收工 progress=1", atOt(17, 30).progress, 1, 1e-9);
+eq("17:30 已收工 barProgress=1", atOt(17, 30).barProgress, 1, 1e-9);
+eq("18:00 下班后加班前 barProgress=1", atOt(18, 0).barProgress, 1, 1e-9);
+const s20 = atOt(20, 0);
+eq("20:00 加班中 progress 仍=1（金额靠它）", s20.progress, 1, 1e-9);
+eq("20:00 加班中 barProgress=50%", s20.barProgress, 0.5, 1e-6);
+eq("19:30 加班中 barProgress=25%", atOt(19, 30).barProgress, 0.25, 1e-6);
+eq("21:30 加班完 barProgress=1", atOt(21, 30).barProgress, 1, 1e-9);
+eq("20:00 钱还在涨（earnedOt>0）", s20.earnedOt > 0, true);
+ok("20:00 已赚 > 17:30 已赚", s20.earned > atOt(17, 30).earned);
+// 非上班日只有加班：进度直接按加班窗口走（午休 11:30-13:00 已扣掉）
+const restModel = Core.deriveModel({ ...otCfg, overtime_weekdays: [6], overtime_start_weekend: "09:00", overtime_end_weekend: "17:00" });
+const sSat = Core.snapshot(restModel, new Date(2026, 10, 14, 13, 0, 0)); // 周六 13:00
+// 窗口 09:00-17:00 扣 90 分钟午休 = 6.5 小时，已干 09:00-11:30 = 2.5 小时
+eq("周六加班 13:00 barProgress=2.5/6.5", sSat.barProgress, 2.5 / 6.5, 1e-6);
+
+/* ---------------- 本月已赚：与「本月还可赚」互补 ---------------- */
+// 不变式：此刻的「已赚 + 还可赚」= 整月干满时的「已赚」。
+// 这样不用手算加班日分布，也不会随配置漂移。
+const sMonthEnd = Core.snapshot(otModel, new Date(2026, 10, 30, 23, 59, 0));
+eq("本月已赚 + 本月还可赚 = 整月总额", s20.monthEarned + s20.monthTotal, sMonthEnd.monthEarned, 0.01);
+// 月初 1 号还没干活时，已赚只等于今天到此刻的部分
+const sNov1 = Core.snapshot(otModel, new Date(2026, 10, 1, 0, 30, 0)); // 周日 00:30，非上班日
+eq("11/1 00:30 本月已赚=0", sNov1.monthEarned, 0, 0.01);
 
 /* ---------------- 阶段判定 ---------------- */
 const phaseAt = (hh, mm, cfg) => Core.snapshot(Core.deriveModel(cfg || D), new Date(2026, 10, 9, hh, mm, 0)).phase;

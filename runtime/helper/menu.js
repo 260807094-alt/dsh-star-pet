@@ -1,12 +1,15 @@
 /*
  * dsh-star-pet · 右键菜单 / 大小二级面板
  * 与 workpet.py 的 _popup_menu / _popup_sizes 同构：
- *   字体（软萌体/普通）· 大小 · 贴边吸附 · 加班 · 设置 · 退出
+ *   字体（软萌体/普通）· 大小 · 面板显示 · 贴边吸附 · 加班 · 设置 · 退出
  * 选中后立即写回配置，主窗 250ms 轮询会自动跟上。
  */
 const S = window.starPet;
 const Core = window.StarPetCore;
-const kind = new URLSearchParams(location.search).get("kind") === "sizes" ? "sizes" : "menu";
+const kind = (() => {
+	const k = new URLSearchParams(location.search).get("kind");
+	return k === "sizes" || k === "panel" ? k : "menu";
+})();
 
 let cfg = {};
 let softOk = true;
@@ -53,7 +56,9 @@ function itemRow(text, kindCls, onClick) {
 async function buildMenu() {
 	const items = document.getElementById("items");
 	items.innerHTML = "";
+	items.style.display = "";
 	document.getElementById("sizes").style.display = "none";
+	document.getElementById("panelView").style.display = "none";
 
 	const softOn = cfg.soft_font !== false && softOk;
 	const fontLabel = softOk ? (softOn ? "字体：软萌体" : "字体：普通") : "字体：普通（缺字体文件）";
@@ -67,6 +72,11 @@ async function buildMenu() {
 	items.appendChild(
 		itemRow("大小", "size", async () => {
 			await buildSizes();
+		})
+	);
+	items.appendChild(
+		itemRow("面板显示", "panel", async () => {
+			await buildPanelToggles();
 		})
 	);
 	items.appendChild(
@@ -97,6 +107,7 @@ async function buildMenu() {
 async function buildSizes() {
 	const box = document.getElementById("sizes");
 	document.getElementById("items").style.display = "none";
+	document.getElementById("panelView").style.display = "none";
 	box.style.display = "grid";
 	box.innerHTML = "";
 
@@ -125,6 +136,63 @@ async function buildSizes() {
 	}
 }
 
+/** 「面板显示」五个开关：与「大小」面板同款格子。
+ *  点一下立即生效并原地刷新，不关窗口 —— 方便连着调几个。
+ *  每个开关的提交函数都写死字面量键（test/audit.cjs 靠这个扫 UI 入口）。 */
+const PANEL_TOGGLES = [
+	["show_perhour", "时薪", (v) => S.apply({ show_perhour: v })],
+	["show_daybase", "日薪", (v) => S.apply({ show_daybase: v })],
+	["show_monthearned", "本月已赚", (v) => S.apply({ show_monthearned: v })],
+	["show_pouch", "窝囊费", (v) => S.apply({ show_pouch: v })],
+	["show_monthremain", "本月还可赚", (v) => S.apply({ show_monthremain: v })],
+];
+
+async function buildPanelToggles() {
+	const box = document.getElementById("panelView");
+	document.getElementById("items").style.display = "none";
+	document.getElementById("sizes").style.display = "none";
+	box.style.display = "grid";
+	box.innerHTML = "";
+
+	const title = document.createElement("div");
+	title.className = "title";
+	title.textContent = "面板显示";
+	box.appendChild(title);
+
+	for (const [key, label, submit] of PANEL_TOGGLES) {
+		const on0 = cfg[key] !== false;
+		const cell = document.createElement("div");
+		cell.className = "cell " + (on0 ? "on" : "off");
+		cell.textContent = label;
+		const mark = document.createElement("span");
+		mark.className = "mark";
+		mark.textContent = on0 ? "✓" : "○";
+		cell.appendChild(mark);
+		cell.addEventListener("click", async (e) => {
+			e.stopPropagation();
+			const next = cfg[key] === false; // 现在是关 → 打开
+			const r = await submit(next);
+			// 以宿主返回的真实值为准：宿主若不认这个键（版本旧/白名单没含它），
+			// 勾就不能翻，否则会出现「看着点上了、面板却没变」的假象。
+			const real = r && r.config && typeof r.config[key] === "boolean" ? r.config[key] : next;
+			cfg[key] = real;
+			cell.className = "cell " + (real ? "on" : "off");
+			mark.textContent = real ? "✓" : "○";
+			try {
+				if (S && typeof S.menuResize === "function") S.menuResize(document.getElementById("body").scrollHeight + 2);
+			} catch (err) {
+				/* ignore */
+			}
+		});
+		box.appendChild(cell);
+	}
+	try {
+		if (S && typeof S.menuResize === "function") S.menuResize(document.getElementById("body").scrollHeight + 2);
+	} catch (e) {
+		/* ignore */
+	}
+}
+
 window.addEventListener("DOMContentLoaded", () => {
 	// 先用默认值把行建出来（同步），这样 did-finish-load 量高时 DOM 已经是满的；
 	// 配置回来后再重绘一次修正状态。
@@ -135,6 +203,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
 async function render() {
 	if (kind === "sizes") await buildSizes();
+	else if (kind === "panel") await buildPanelToggles();
 	else await buildMenu();
 	const body = document.getElementById("body");
 	if (S && typeof S.menuResize === "function") {

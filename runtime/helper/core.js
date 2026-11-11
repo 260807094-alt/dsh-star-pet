@@ -44,6 +44,13 @@
 		sound: true,
 		soft_font: true,
 		show_chip: false,
+		// 面板显示：右键菜单「面板显示」里的五个开关。
+		// 关掉只把那一行的数值换成「-」，标签和行高都不动（版式不跳）。
+		show_perhour: true,
+		show_daybase: true,
+		show_monthearned: true,
+		show_pouch: true,
+		show_monthremain: true,
 		// 吐槽
 		show_banter: true,
 		banter_every_sec: 30,
@@ -386,6 +393,20 @@
 		return { days, base: days * model.daily, ot };
 	}
 
+	/** 本月已经赚到多少：1 号到昨天按整天算，今天用「到此刻」的两个数。
+	 *  与 monthRemaining 互补 —— 已赚 + 还可赚 = 整月总额。 */
+	function monthEarned(model, now, earnedBase, earnedOt) {
+		const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+		let sum = 0;
+		const d = new Date(today.getFullYear(), today.getMonth(), 1);
+		while (d.getMonth() === today.getMonth() && d < today) {
+			if (isWorkday(model, d)) sum += model.daily;
+			sum += otPayForDay(model, d);
+			d.setDate(d.getDate() + 1);
+		}
+		return sum + (earnedBase || 0) + (earnedOt || 0);
+	}
+
 	/* ------------------------------------------------------------------
 	 * 快照：看板要显示的全部数字
 	 * ------------------------------------------------------------------ */
@@ -449,6 +470,26 @@
 				? clamp(otWorked / otSpanSec, 0, 1)
 				: 0;
 
+		/* 进度条真正显示的百分比（barProgress）。
+		 * progress 同时驱动 earnedBase / remDays，语义不能动；而面板和胶囊要的是
+		 * 「眼下这一段该走多少」：
+		 *   上班 / 午休      → 上班进度
+		 *   下班后到加班前   → 100%（今天的班已经上完）
+		 *   加班中           → 加班进度（从 0 重新走）
+		 *   已收工           → 100%
+		 * 非上班日只有加班，直接按加班进度。 */
+		let barProgress;
+		if (workday) {
+			if (cur >= model.endMin) {
+				const inOt = otWindowValid && cur >= otStartMin && cur < otEndMin;
+				barProgress = inOt ? (otSpanSec > 0 ? clamp(otWorked / otSpanSec, 0, 1) : 1) : 1;
+			} else {
+				barProgress = progress;
+			}
+		} else {
+			barProgress = otSpanSec > 0 ? clamp(otWorked / otSpanSec, 0, 1) : 0;
+		}
+
 		const rem = monthRemaining(model, now);
 
 		/* 六个金额，命名规则：前缀 = 时间范围，后缀 = 是不是加班费。
@@ -471,6 +512,7 @@
 		const monthOt = Math.max(0, rem.ot - earnedOt);
 		const todayDone = workday && model.daily > 0 && earnedBase >= model.daily - 1e-9;
 		const remDays = Math.max(0, rem.days - (todayDone ? 1 : 0));
+		const monthEarnedTotal = monthEarned(model, now, earnedBase, earnedOt);
 
 		return {
 			now,
@@ -478,6 +520,7 @@
 			workday,
 			phase,
 			progress,
+			barProgress,
 			// 时间
 			worked,
 			remaining: Math.max(0, model.netSec - baseWorked),
@@ -496,6 +539,7 @@
 			monthBase,
 			monthOt,
 			monthTotal: monthBase + monthOt,
+			monthEarned: monthEarnedTotal,
 			remDays,
 			// 彩蛋：开着加班，但两档倍率全是 0 —— 白加班。
 			otAllZero: model.otOn && model.otWorkRate <= 0 && model.otRestRate <= 0,

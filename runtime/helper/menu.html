@@ -67,6 +67,28 @@
 	}
 	#sizes .cell.on { background: #1d3a2b; color: #3ad17f; }
 	#sizes .title { grid-column: 1 / -1; text-align: center; color: #7d8798; font-size: 12px; padding: 2px 0 4px; }
+	/* 面板显示：单列开关，和 #sizes 同一套格子外观 */
+	#panelView {
+		display: none;
+		grid-template-columns: 1fr;
+		gap: 4px;
+		padding: 2px;
+	}
+	#panelView .cell {
+		position: relative;
+		height: 28px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: #1b212a;
+		border-radius: 6px;
+		font-size: 12.7px;
+		color: #e9eef8;
+	}
+	#panelView .cell.on { background: #1d3a2b; color: #3ad17f; }
+	#panelView .cell.off { color: #7d8798; }
+	#panelView .cell .mark { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 12px; }
+	#panelView .title { text-align: center; color: #7d8798; font-size: 12px; padding: 2px 0 4px; }
 </style>
 </head>
 <body>
@@ -74,6 +96,7 @@
 		<div id="body">
 			<div id="items"></div>
 			<div id="sizes"></div>
+			<div id="panelView"></div>
 		</div>
 	</div>
 	<script src="./core.js"></script>

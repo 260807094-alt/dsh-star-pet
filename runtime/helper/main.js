@@ -141,8 +141,8 @@ function request(method, urlPath, body) {
 
 const PAD = 9;
 const PANEL_W = 344;
-// 必须与 renderer.js 的 PANEL_H 一致：加了「加班 / 倍率」一行后从 252 变 274
-const PANEL_H = 274;
+// 必须与 renderer.js 的 PANEL_H 一致：加了「本月已赚」一行后从 274 变 298
+const PANEL_H = 298;
 const GAP = 8;
 /** 宠物贴边时的默认边距（不再是配置项 —— 配置里没有 margin_* 这两个键）。 */
 const MARGIN_RIGHT = 22;
@@ -271,8 +271,11 @@ function openMenu(kind, at) {
 	closeMenu();
 	const display = screen.getDisplayNearestPoint(at);
 	const wa = display.workArea;
-	const w = kind === "sizes" ? 210 : 150;
-	const fallback = kind === "sizes" ? 176 : 200;
+	// 三种菜单：主菜单 / 大小二级 / 面板显示二级（宽度按内容给）
+	const MENU_W = { menu: 150, sizes: 210, panel: 176 };
+	const MENU_FALLBACK_H = { menu: 200, sizes: 176, panel: 210 };
+	const w = MENU_W[kind] || 150;
+	const fallback = MENU_FALLBACK_H[kind] || 200;
 	const m = new BrowserWindow({
 		width: w,
 		height: 40,
@@ -682,7 +685,7 @@ ipcMain.on("pet:drag-end", (e) => {
 
 ipcMain.handle("pet:menu", (_e, payload) => {
 	const at = screen.getCursorScreenPoint();
-	const kind = payload && payload.kind === "sizes" ? "sizes" : "menu";
+	const kind = payload && ["sizes", "panel"].includes(payload.kind) ? payload.kind : "menu";
 	// 菜单在指针处弹出（和 Tk 的 _popup_menu 一致）
 	return openMenu(kind, payload && payload.at ? payload.at : at);
 });
@@ -719,6 +722,9 @@ ipcMain.handle("pet:apply", async (_e, patch) => {
 			if (pet && !pet.isDestroyed()) {
 				const b = pet.getBounds();
 				pet.setBounds(clampToDisplay({ x: b.x, y: b.y - (h - b.height), width: w, height: h }, screen.getDisplayNearestPoint({ x: b.x, y: b.y })));
+				// 立刻把新配置推给渲染端：菜单/设置页改完不必等 1s 轮询，
+				// 面板当帧就跟着变（轮询仍保留，用于外部直接改 config.json 的兜底）。
+				pet.webContents.send("pet:config", r.config);
 			}
 		}
 		return r;

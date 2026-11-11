@@ -24,12 +24,14 @@ const C = {
 	ACCENT: "#5b9cff",
 	BAR_BG: "#242b38",
 	GOLD: "#e8c060",
+	// 状态行专用：搬砖中=黄(GOLD)、加班中=红、其余一律绿(MONEY)
+	RED: "#ff5d5d",
 };
 
 const PAD = 9;
 const GAP = 8;
 const PANEL_W = 344;
-const PANEL_H = 274;
+const PANEL_H = 298;
 const CHIP_H = 27;
 // 宠物尺寸/雪碧图档位一律走 Core（core.js 里只有一份定义）
 
@@ -281,6 +283,12 @@ function setColor(el, color) {
 	if (el && el.style.color !== color) el.style.color = color;
 }
 
+/** 面板显示开关：默认显示，只有显式为 false 才隐藏。
+ *  隐藏时把那一格数字换成「-」，标签和行高都不动。 */
+function showOn(key) {
+	return !st.cfg || st.cfg[key] !== false;
+}
+
 function buildPanel() {
 	const p = document.getElementById("panel");
 	// 面板相对坐标 = Tk 绝对坐标 - PAD(9)：left 16 / right 328 / mid 172
@@ -288,7 +296,12 @@ function buildPanel() {
 	const LABEL = st.soft ? FAMILY_SOFT : FAMILY_PLAIN, PLAIN = "inherit";
 
 	// ① 状态行：左组右对齐、右组左对齐，各自贴中轴
-	P.phase = mkEl(p, { right: PANEL_W - (mid - 11) + "px", top: "19px", transform: "translateY(-50%)", color: C.DIM, fontSize: FONT.label + "px", fontFamily: PLAIN }, "—");
+	// 阶段词与「· 周一」拆成两个 span —— 只有阶段词按状态染色，星期保持灰。
+	P.phase = mkEl(p, { right: PANEL_W - (mid - 11) + "px", top: "19px", transform: "translateY(-50%)", color: C.DIM, fontSize: FONT.label + "px", fontFamily: PLAIN, whiteSpace: "nowrap" }, "");
+	P.phaseStage = document.createElement("span");
+	P.phaseWd = document.createElement("span");
+	P.phaseWd.style.color = C.DIM;
+	P.phase.append(P.phaseStage, P.phaseWd);
 	P.clock = mkEl(p, { left: mid + 11 + "px", top: "19px", transform: "translateY(-50%)", color: C.DIM, fontSize: FONT.label + "px", fontFamily: PLAIN }, "");
 	P.phase.style.textAlign = "right";
 
@@ -360,8 +373,8 @@ function buildPanel() {
 	Object.assign(line.style, { left: left + "px", top: "209px", width: right - left + "px", height: "1px", background: C.STROKE });
 	p.appendChild(line);
 
-	// ⑦ 两行通栏（整组居中）
-	for (const [yy, label, key, color] of [[230, "本月剩余工作日", "remDays", C.GOLD], [254, "本月还可赚", "monthBase", C.MONEY]]) {
+	// ⑦ 三行通栏（整组居中）：本月剩余工作日 / 本月已赚 / 本月还可赚
+	for (const [yy, label, key, color] of [[230, "本月剩余工作日", "remDays", C.GOLD], [254, "本月已赚", "monthEarned", C.MONEY], [278, "本月还可赚", "monthBase", C.MONEY]]) {
 		const row = document.createElement("div");
 		row.className = "abs";
 		Object.assign(row.style, {
@@ -414,7 +427,10 @@ function refreshPanel(snap) {
 
 	const phaseTxt = { working: "搬砖中", lunch: "午休中", before: "还没上班", after: "已收工", rest: "今天休息", idle: "休息中", overtime: "加班中" }[snap.phase] || "—";
 	const wd = WD_NAMES[(snap.now.getDay() + 6) % 7];
-	setText(P.phase, phaseTxt + " · " + wd);
+	// 只有阶段词按状态染色：搬砖中=黄，加班中=红，其余一律绿；星期始终灰。
+	setText(P.phaseStage, phaseTxt);
+	setText(P.phaseWd, " · " + wd);
+	setColor(P.phaseStage, snap.phase === "overtime" ? C.RED : snap.phase === "working" ? C.GOLD : C.MONEY);
 	const clk = String(snap.now.getMonth() + 1).padStart(2, "0") + "-" + String(snap.now.getDate()).padStart(2, "0") + " " + String(snap.now.getHours()).padStart(2, "0") + ":" + String(snap.now.getMinutes()).padStart(2, "0");
 	setText(P.clock, clk);
 
@@ -427,16 +443,17 @@ function refreshPanel(snap) {
 		: "今日已赚 · 每秒 ¥" + (secRate || 0).toFixed(4);
 	setText(P.sub, sub);
 
-	const pct = Math.round(snap.progress * 100);
+	// 进度条走 barProgress（加班中从 0 重走、已收工恒 100%），颜色恒蓝。
+	const pct = Math.round(snap.barProgress * 100);
 	setText(P.pct, pct + "%");
-	const wpx = snap.progress > 0 ? Math.max(3, (PANEL_W - 32) * snap.progress) : 1;
+	const wpx = snap.barProgress > 0 ? Math.max(3, (PANEL_W - 32) * snap.barProgress) : 1;
 	P.barFill.style.width = wpx + "px";
 
-	setText(P.perhour, "¥" + money(snap.model.perHour));
+	setText(P.perhour, showOn("show_perhour") ? "¥" + money(snap.model.perHour) : "-");
 	// 日薪一格只有绿字：当日基础日薪（非上班日为 ¥0.00）。
 	// 当天的加班费不在这里重复显示 —— 它在下面「窝囊费」格。
 	const dayTxt = "¥" + money(snap.dayBase);
-	setText(P.dayBase, dayTxt);
+	setText(P.dayBase, showOn("show_daybase") ? dayTxt : "-");
 	setText(P.worked, durText(snap.worked));
 	// 加班中 → 「距离加班结束」；下班到加班开始之间 → 「距离加班」；
 	// 其余时段保持「距离下班」
@@ -479,7 +496,10 @@ function refreshPanel(snap) {
 	setText(P.otspan, spanTxt);
 	// 窝囊费格：今天这天的加班费（= snapshot.dayOt）。
 	// 彩蛋：开着加班但两档倍率全是 0 —— 加班一分钱不给，这一天纯窝囊。
-	if (snap.otAllZero) {
+	if (!showOn("show_pouch")) {
+		setText(P.pouch, "-");
+		setColor(P.pouch, C.ACCENT);
+	} else if (snap.otAllZero) {
 		setText(P.pouch, "太窝囊了");
 		setColor(P.pouch, "#6b7488");
 	} else {
@@ -488,14 +508,21 @@ function refreshPanel(snap) {
 		setColor(P.pouch, C.ACCENT);
 	}
 	setText(P.remDays, snap.remDays + " 天");
+	// 本月已赚：基本 + 加班合计，一个绿值。
+	setText(P.monthEarned, showOn("show_monthearned") ? "¥" + money(snap.monthEarned) : "-");
 	// 「本月还可赚」= 基本工资（绿）+ 加班工资（蓝）。
 	// 加班工资是把本月剩余每一天按当前设置单独算一遍再加总
 	//（工作日/周末倍率不同，加班日也不一定等于上班日）。
 	// 加班关掉或本月剩余没有加班时，蓝色段不显示，只留绿色基本工资。
-	setText(P.monthBase, "¥" + money(snap.monthBase));
-	if (P.monthOt) {
-		const otTxt = snap.monthOt > 0.005 ? "+¥" + money(snap.monthOt) : "";
-		setText(P.monthOt, otTxt);
+	if (!showOn("show_monthremain")) {
+		setText(P.monthBase, "-");
+		if (P.monthOt) setText(P.monthOt, "");
+	} else {
+		setText(P.monthBase, "¥" + money(snap.monthBase));
+		if (P.monthOt) {
+			const otTxt = snap.monthOt > 0.005 ? "+¥" + money(snap.monthOt) : "";
+			setText(P.monthOt, otTxt);
+		}
 	}
 }
 
@@ -503,7 +530,7 @@ function refreshChip(snap) {
 	const chip = document.getElementById("chip");
 	// 设置里勾上「胶囊」后要立刻出现在头顶（否则要展开再收起一次才显示）
 	if (chip.style.display !== "flex") chip.style.display = "flex";
-	setText(chip, "¥" + money(snap.earned) + " · " + Math.round(snap.progress * 100) + "%");
+	setText(chip, "¥" + money(snap.earned) + " · " + Math.round(snap.barProgress * 100) + "%");
 	const a = st.size;
 	const pad = 9;
 	const hh = CHIP_H;
@@ -798,6 +825,28 @@ function tick(now) {
 }
 
 let model = null; // 派生模型（Core.deriveModel 的结果），配置变了就重建
+
+/** 吸收一份新配置。轮询与主进程推送共用这一个入口：
+ *  两者可能同时到达，所以必须幂等 —— 配置内容真的变了才重建模型
+ *  （deriveModel 里有几次 parse，没必要每秒重跑）。 */
+function applyConfig(cfg) {
+	if (!cfg) return;
+	const prev = st.cfg;
+	st.cfg = cfg;
+	const newSize = Core.petSizeOf(cfg.pet_size_index);
+	if (newSize !== st.size) {
+		st.size = newSize;
+		layout();
+		S.resize(st.size);
+	}
+	const soft = cfg.soft_font !== false;
+	if (soft !== st.soft) {
+		st.soft = soft;
+		applyFont();
+	}
+	if (JSON.stringify(prev) !== JSON.stringify(cfg)) model = computeState(cfg);
+}
+
 function refresh() {
 	const now = new Date();
 	if (!model) return;
@@ -953,29 +1002,17 @@ S.boot(async (payload) => {
 	//   配置 1s 拉一次（宿主那边是 readFileSync + JSON.parse，250ms 一次属于白烧 IO），
 	//   同时兼作宿主存活探测 —— 连续 8 次拉不到就自己退出，避免留下孤儿窗口。
 	setInterval(refresh, 250);
+	// 推送优先：菜单/设置页改完，主进程会立刻送一份新配置过来，
+	// 点开关面板当帧就跟上，不必等下一次轮询（最多要等 1.25s）。
+	// 老 preload 没有 onConfig 时退回纯轮询，不至于整段启动逻辑抛错。
+	if (typeof S.onConfig === "function") S.onConfig((cfg) => applyConfig(cfg));
 	const CONFIG_POLL_MS = 1000;
 	const CONFIG_FAIL_LIMIT = 8;
 	setInterval(async () => {
 		try {
 			const r = await S.req("GET", "/config");
 			failCount = 0;
-			if (r && r.config) {
-				const prev = st.cfg;
-				st.cfg = r.config;
-				const newSize = Core.petSizeOf(r.config.pet_size_index);
-				if (newSize !== st.size) {
-					st.size = newSize;
-					layout();
-					S.resize(st.size);
-				}
-				const soft = r.config.soft_font !== false;
-				if (soft !== st.soft) {
-					st.soft = soft;
-					applyFont();
-				}
-				// 配置真的变了才重建模型（deriveModel 里有几次 parse，没必要每秒重跑）
-				if (JSON.stringify(prev) !== JSON.stringify(r.config)) model = computeState(r.config);
-			}
+			if (r && r.config) applyConfig(r.config);
 		} catch (e) {
 			failCount += 1;
 			if (failCount >= CONFIG_FAIL_LIMIT) S.quit();

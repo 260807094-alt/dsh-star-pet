@@ -14,6 +14,11 @@ const api = {
 	onDragged(cb) {
 		ipcRenderer.on("pet:dragged", (_e, payload) => cb(payload));
 	},
+	/** 配置被改（菜单/设置页）后主进程立刻推一份新配置过来 ——
+	 *  不必等 1s 轮询，点完开关面板当帧就能变。 */
+	onConfig(cb) {
+		ipcRenderer.on("pet:config", (_e, cfg) => cb(cfg));
+	},
 	/** true = 整窗点击穿透（指针不在宠物/面板上时） */
 	ignore(flag) {
 		ipcRenderer.send("pet:ignore", !!flag);
