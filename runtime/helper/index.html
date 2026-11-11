@@ -47,7 +47,9 @@
 	}
 	#petWrap {
 		position: absolute;
-		transform-origin: 50% 100%;
+		/* 绕帧中心旋转：躲藏时整只逆时针转 90°，绕底边转会向下翻倒、被窗口底边裁掉一块。
+		   正常站立时 transform 是 none，这里的原点对静止/挤压都没影响。 */
+		transform-origin: 50% 50%;
 		will-change: transform;
 	}
 	#petImg { display: block; background-repeat: no-repeat; }

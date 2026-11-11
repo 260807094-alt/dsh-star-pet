@@ -166,16 +166,16 @@ const st = {
 const DOCK_STAR_RATIO = 42 / 324;
 
 /** 「只留星星」要滑多远（正数）。
- *  注意 transform-origin 是 50% 100%（底边中点，挤压动画靠它「脚踩地」），
- *  所以绕底边转 −90° 后图形并不是以宠物中心为心，而是整体左移了 a/2：
- *    旋转后左缘 = cx − a   （实测 a=108 时 299−108 = 191，与 getBoundingClientRect 吻合）
- *    星星占     [cx − a, cx − a + a·RATIO]
+ *  transform-origin 是 50% 50%（帧中心）：绕中心转 −90° 后图形仍以宠物中心为心，
+ *  旋转后宽度 = 帧高 = a，所以：
+ *    旋转后左缘 = cx − a/2
+ *    星星占     [cx − a/2, cx − a/2 + a·RATIO]
  *  贴边时 cx = winW − PAD − a/2，要让星星刚好卡在窗口右缘：
- *    slide = winW − (cx − a + a·RATIO) = PAD + a·(1.5 − RATIO)
+ *    slide = winW − (cx − a/2 + a·RATIO) = PAD + a·(1 − RATIO)
  *  两个方向都用正数：贴左边时最外层 scaleX(-1) 会把局部 +tx 镜像成屏幕向左。 */
 function dockSlidePx() {
 	const a = st.pet && st.pet.w ? st.pet.w : st.size;
-	return PAD + a * (1.5 - DOCK_STAR_RATIO);
+	return PAD + a * (1 - DOCK_STAR_RATIO);
 }
 
 let dockCtrl = null;

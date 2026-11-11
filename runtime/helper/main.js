@@ -159,6 +159,7 @@ let state = {
 	snapEnabled: true,
 	snapPx: 28,
 	flipOnLeft: true,
+	dockHide: false, // 贴边躲藏：贴边时把窗口强制吸死到屏幕边
 };
 
 function petWindowSize() {
@@ -251,12 +252,18 @@ function endDrag() {
 		if (Math.abs(y - wa.y) <= tol) y = wa.y;
 		if (Math.abs(wa.y + wa.height - (y + b.height)) <= tol) y = wa.y + wa.height - b.height;
 	}
-	const nb = clampToDisplay({ x, y, width: b.width, height: b.height }, display);
+	let nb = clampToDisplay({ x, y, width: b.width, height: b.height }, display);
+	// 贴边躲藏开着时，只要落在贴边容差内就必须真的贴死屏幕边：
+	// 容差只用来容忍手抖，不能当成「半路就算贴上了」，否则躲起来只剩的
+	// 那颗星星会悬在离屏幕边十几像素的空气里。这一步无视 snap_enabled。
+	if (state.dockHide && enforceEdge(nb, wa, state.snapPx)) {
+		nb = clampToDisplay(nb, display);
+	}
 	pet.setBounds(nb);
 	// 贴到屏幕左半边 → 整只镜像（渲染端按这个布尔翻转）
 	const left = nb.x + nb.width / 2 < wa.x + wa.width / 2;
 	request("POST", "/window", { x: nb.x, y: nb.y }).catch(() => {});
-	pet.webContents.send("pet:flip", { left, edge: edgeOf(nb, wa, tol) });
+	pet.webContents.send("pet:flip", { left, edge: edgeOf(nb, wa, state.snapPx) });
 	return { x: nb.x, y: nb.y, left };
 }
 
@@ -269,6 +276,16 @@ function edgeOf(b, wa, tol) {
 	if (Math.abs(b.x - wa.x) <= t) return "left";
 	if (Math.abs(wa.x + wa.width - (b.x + b.width)) <= t) return "right";
 	return null;
+}
+
+/** 把窗口真的吸到屏幕左/右边缘（原地改 b.x），返回吸到了哪条边。
+ *  吸附与躲藏的关系：吸附负责「贴上边」，躲藏只负责「贴上之后跳进去」。
+ *  所以躲藏开着时，凡是被 edgeOf 判为贴边的位置，都必须先走这一步贴死。 */
+function enforceEdge(b, wa, tol) {
+	const edge = edgeOf(b, wa, tol);
+	if (edge === "left") b.x = wa.x;
+	if (edge === "right") b.x = wa.x + wa.width - b.width;
+	return edge;
 }
 
 // ---------------------------------------------------------------- 菜单窗口
@@ -494,6 +511,7 @@ async function bootstrap() {
 			snapEnabled: cfg.snap_enabled !== false,
 			snapPx: Number(cfg.snap_px) || 28,
 			flipOnLeft: cfg.flip_on_left !== false,
+			dockHide: cfg.dock_hide === true,
 		});
 	} catch (e) {
 		// 宿主还没起来：用默认值先起窗，之后渲染端会重试拿配置
@@ -509,7 +527,12 @@ async function bootstrap() {
 		winState && Number.isFinite(winState.x)
 			? screen.getDisplayNearestPoint({ x: Math.round(rawPos.x), y: Math.round(rawPos.y) })
 			: screen.getPrimaryDisplay();
-	const pos = clampToDisplay({ x: Math.round(rawPos.x), y: Math.round(rawPos.y), width: w, height: h }, targetDisplay);
+	let pos = clampToDisplay({ x: Math.round(rawPos.x), y: Math.round(rawPos.y), width: w, height: h }, targetDisplay);
+	// 贴边躲藏开着时，启动位置若落在贴边容差内也要先贴死屏幕边：
+	// 默认落点故意留了 MARGIN_RIGHT=22，正好在容差里，不吸的话躲起来那颗星会悬空。
+	if (state.dockHide && enforceEdge(pos, targetDisplay.workArea, state.snapPx)) {
+		pos = clampToDisplay(pos, targetDisplay);
+	}
 	log("display", JSON.stringify({ scale: targetDisplay.scaleFactor, workArea: targetDisplay.workArea, size: targetDisplay.size }), "raw", JSON.stringify(rawPos), "clamped", JSON.stringify(pos));
 
 	pet = new BrowserWindow({
@@ -725,17 +748,33 @@ ipcMain.handle("pet:apply", async (_e, patch) => {
 	try {
 		const r = await request("POST", "/config", patch || {});
 		if (r && r.config) {
+			const dockWas = state.dockHide;
 			Object.assign(state, {
 				petSize: Core.petSizeOf(r.config.pet_size_index),
 				showChip: r.config.show_chip === true,
 				snapEnabled: r.config.snap_enabled !== false,
 				snapPx: Number(r.config.snap_px) || state.snapPx,
 				flipOnLeft: r.config.flip_on_left !== false,
+				dockHide: r.config.dock_hide === true,
 			});
 			const { w, h } = petWindowSize();
 			if (pet && !pet.isDestroyed()) {
 				const b = pet.getBounds();
-				pet.setBounds(clampToDisplay({ x: b.x, y: b.y - (h - b.height), width: w, height: h }, screen.getDisplayNearestPoint({ x: b.x, y: b.y })));
+				const display = screen.getDisplayNearestPoint({ x: b.x, y: b.y });
+				let nb = clampToDisplay({ x: b.x, y: b.y - (h - b.height), width: w, height: h }, display);
+				// 刚打开贴边躲藏时也补一次吸附，避免「开关一开就悬空着躲」。
+				if (state.dockHide && enforceEdge(nb, display.workArea, state.snapPx)) {
+					nb = clampToDisplay(nb, display);
+				}
+				pet.setBounds(nb);
+				// 开/关躲藏都会改变贴边状态，主进程这边要重新告诉渲染端一次，
+				// 否则渲染端只能等下一次拖拽才知道该不该躲。
+				if (state.dockHide !== dockWas) {
+					pet.webContents.send("pet:flip", {
+						left: nb.x + nb.width / 2 < display.workArea.x + display.workArea.width / 2,
+						edge: edgeOf(nb, display.workArea, state.snapPx),
+					});
+				}
 				// 立刻把新配置推给渲染端：菜单/设置页改完不必等 1s 轮询，
 				// 面板当帧就跟着变（轮询仍保留，用于外部直接改 config.json 的兜底）。
 				pet.webContents.send("pet:config", r.config);
@@ -767,5 +806,11 @@ ipcMain.on("pet:resize", (_e, size) => {
 	state.petSize = size;
 	const { w, h } = petWindowSize();
 	const b = pet.getBounds();
-	pet.setBounds(clampToDisplay({ x: b.x, y: b.y + b.height - h, width: w, height: h }, screen.getDisplayNearestPoint({ x: b.x, y: b.y })));
+	const display = screen.getDisplayNearestPoint({ x: b.x, y: b.y });
+	let nb = clampToDisplay({ x: b.x, y: b.y + b.height - h, width: w, height: h }, display);
+	// 换尺寸会改变窗口宽度，贴着边时不能因此离开屏幕边（否则躲藏就断了）。
+	if (state.dockHide && enforceEdge(nb, display.workArea, state.snapPx)) {
+		nb = clampToDisplay(nb, display);
+	}
+	pet.setBounds(nb);
 });
