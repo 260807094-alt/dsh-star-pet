@@ -12,6 +12,9 @@ const S = window.starPet;
 // 共享核心（core.js 在 index.html 里先加载）：默认配置、时间解析、计薪口径
 // 全部从这里取，渲染端不再自带一份 —— 设置页/宿主看板算出来的数必须同源。
 const Core = window.StarPetCore;
+// 贴边躲藏（独立模块，见 dock.js）：只在启用时产出 dock 变换，
+// 未启用时 petTransform 的结果与改动前完全一致。
+const Dock = window.StarPetDock;
 
 // ───────────────────────────── 主题常量（与 workpet.py 一致）
 const C = {
@@ -158,6 +161,37 @@ const st = {
 	banters: [],
 };
 
+// ───────────────────────────── 贴边躲藏控制器（见 dock.js）
+/** 旋转 −90° 后星星占旋转图宽度的比例（实测：星宽 42 / 旋转图宽 324）。 */
+const DOCK_STAR_RATIO = 42 / 324;
+
+/** 「只留星星」要滑多远（正数）。
+ *  注意 transform-origin 是 50% 100%（底边中点，挤压动画靠它「脚踩地」），
+ *  所以绕底边转 −90° 后图形并不是以宠物中心为心，而是整体左移了 a/2：
+ *    旋转后左缘 = cx − a   （实测 a=108 时 299−108 = 191，与 getBoundingClientRect 吻合）
+ *    星星占     [cx − a, cx − a + a·RATIO]
+ *  贴边时 cx = winW − PAD − a/2，要让星星刚好卡在窗口右缘：
+ *    slide = winW − (cx − a + a·RATIO) = PAD + a·(1.5 − RATIO)
+ *  两个方向都用正数：贴左边时最外层 scaleX(-1) 会把局部 +tx 镜像成屏幕向左。 */
+function dockSlidePx() {
+	const a = st.pet && st.pet.w ? st.pet.w : st.size;
+	return PAD + a * (1.5 - DOCK_STAR_RATIO);
+}
+
+let dockCtrl = null;
+function ensureDock() {
+	if (dockCtrl || !Dock) return dockCtrl;
+	dockCtrl = Dock.create({
+		apply: (tf) => {
+			const wrap = document.getElementById("petWrap");
+			if (wrap) wrap.style.transform = tf;
+		},
+		slidePx: dockSlidePx,
+		mirror: () => st.left,
+	});
+	return dockCtrl;
+}
+
 // ───────────────────────────── 派生量（全部委托 core.js）
 // 计薪口径只有 core.js 一份实现：宿主、设置页、渲染端算出来的数必须严格一致。
 // 这里只做转调，不再自备一套 —— 曾经三份副本各夹各的边界，是最大的维护负担。
@@ -233,7 +267,8 @@ function layoutPet() {
 	wrap.style.height = fh + "px";
 	wrap.style.left = cx - fw / 2 + "px";
 	wrap.style.top = cy - fh / 2 + "px";
-	wrap.style.transform = st.left ? "scaleX(-1)" : "none";
+	// transform 的唯一出口（见 dock.js）：mirror + 躲藏位移一次性合成
+	wrap.style.transform = Dock.petTransform({ mirror: st.left, dock: dockCtrl ? dockCtrl.current() : null });
 	if (!st.squish) st.frameIdx = frameFor(st.squishE);
 	applyFrame();
 }
@@ -580,8 +615,9 @@ function tickSquish(now) {
 	// 帧本身已经画了形变，这里只做兜底微调（保证边缘手感）。
 	// 注意不能写成 "scaleX(-1) none" —— 那是非法值，浏览器整条 transform 都会丢弃，
 	// 结果是挤压动画期间左侧的镜像消失（v1.2 的实际 bug）。
+	// 现在统一交给 Dock.petTransform 拼（mirror + 躲藏位移），避免两处各写各的。
 	const wrap = document.getElementById("petWrap");
-	const wantTf = st.left ? "scaleX(-1)" : "none";
+	const wantTf = Dock.petTransform({ mirror: st.left, dock: dockCtrl ? dockCtrl.current() : null });
 	if (wrap.style.transform !== wantTf) wrap.style.transform = wantTf;
 	if (p >= 1) {
 		const target = st.squish.to;
@@ -754,8 +790,14 @@ function inPet(x, y) {
 	return !!box && x >= box[0] && x <= box[2] && y >= box[1] && y <= box[3];
 }
 
+/** 贴边躲藏中：宠物主体已被裁到窗外，只剩一颗星星可见，
+ *  这时不能把整块宠物矩形当成可点挡板（否则会挡住宿主界面的鼠标）。 */
+function dockHidden() {
+	return !!(dockCtrl && dockCtrl.hidden());
+}
+
 function hitTest(x, y) {
-	if (inPet(x, y)) return true;
+	if (!dockHidden() && inPet(x, y)) return true;
 	if (st.expanded) {
 		return x >= PAD && x <= PAD + PANEL_W && y >= PAD && y <= PAD + PANEL_H;
 	}
@@ -767,6 +809,15 @@ function hitTest(x, y) {
 		}
 	}
 	return false;
+}
+
+/** 鼠标是否落在「沿贴边那条竖带」里 —— 躲藏的热区。
+ *  高度 = 宠物高，宽度 DOCK_ZONE；横跨屏幕边缘那一侧。 */
+const DOCK_ZONE = 26;
+function updateDockHover(x, y) {
+	if (!dockCtrl || !st.cfg.dock_hide) return;
+	const inside = Dock.inZone(x, y, st.pet, st.winW, DOCK_ZONE, st.left);
+	dockCtrl.pointer(inside);
 }
 
 // ───────────────────────────── 声音
@@ -819,6 +870,7 @@ function tick(now) {
 	const dt = Math.min(64, now - lastTick);
 	lastTick = now;
 	tickSquish(now);
+	if (dockCtrl) dockCtrl.tick(now); // 贴边躲藏动画（未启用时控制器内部直接返回）
 	tickFloats(dt);
 	tickBanters(dt);
 	requestAnimationFrame(tick);
@@ -845,6 +897,12 @@ function applyConfig(cfg) {
 		applyFont();
 	}
 	if (JSON.stringify(prev) !== JSON.stringify(cfg)) model = computeState(cfg);
+	// 贴边躲藏：开关变化 / 尺寸变化都要重新落地（关掉时控制器自己复位）
+	const dockOn = cfg.dock_hide === true;
+	if (dockCtrl || dockOn) {
+		ensureDock();
+		dockCtrl.setEnabled(dockOn);
+	}
 }
 
 function refresh() {
@@ -861,7 +919,8 @@ function refresh() {
 	else document.getElementById("chip").style.display = "none";
 
 	// 飘字节奏：搬砖中或加班中才冒；间隔取配置（1–10 秒，250ms 一轮），金额 = 这 N 秒赚到的钱
-	if (st.cfg.show_float !== false && (snap.phase === "working" || snap.phase === "overtime")) {
+	// 贴边躲藏中（宠物已滑出窗外、只剩星星）不冒飘字，否则会浮在空气里
+	if (st.cfg.show_float !== false && !dockHidden() && (snap.phase === "working" || snap.phase === "overtime")) {
 		st.floatAcc += 1;
 		if (st.floatAcc >= floatSec() * 4) {
 			st.floatAcc = 0;
@@ -874,7 +933,7 @@ function refresh() {
 	// 吐槽：默认只在「上班/加班」时冒（banter_mode === "workday"）；「全天」则只要可见就冒。
 	// 「下班前」那组由 banterBeforeOffWork 按时间自动切换。
 	const banterMode = st.cfg.banter_mode || "workday";
-	const banterAllowed = st.cfg.show_banter !== false &&
+	const banterAllowed = st.cfg.show_banter !== false && !dockHidden() &&
 		(banterMode === "allday" || snap.phase === "working" || snap.phase === "overtime");
 	if (banterAllowed) {
 		st.banterAcc += 1;
@@ -906,6 +965,7 @@ function bindPointer() {
 		} else if (over && inPet(e.clientX, e.clientY)) {
 			moveTip(e);
 		}
+		updateDockHover(e.clientX, e.clientY);
 	});
 
 	window.addEventListener("mouseleave", () => {
@@ -996,6 +1056,12 @@ S.boot(async (payload) => {
 	loadBanter();
 	setInterval(loadBanter, 30000); // 每 30 秒重读 banter.txt，改文件无需重启
 	refresh();
+	// 启动时若本来就贴着屏幕边，直接进入躲藏（无需等下一次拖拽）
+	if (cfg.dock_hide === true) {
+		ensureDock();
+		dockCtrl.setEnabled(true);
+		dockCtrl.setEdge(typeof payload.edge === "string" ? payload.edge : null);
+	}
 
 	// 两条节奏分开：
 	//   渲染 250ms 一轮（只算数、改 DOM，不碰磁盘）；
@@ -1019,12 +1085,18 @@ S.boot(async (payload) => {
 		}
 	}, CONFIG_POLL_MS);
 
-	S.onFlip(({ left }) => {
+	S.onFlip(({ left, edge }) => {
 		// Tk _draw()：left = _flip_now() or _on_left_half()
 		const next = !!left && st.cfg.flip_on_left !== false;
-		if (next === st.left) return;
-		st.left = next;
-		layout();
+		if (next !== st.left) {
+			st.left = next;
+			layout();
+		}
+		// 贴边躲藏：主进程每次拖拽结束都会告知当前贴的是哪条边（null = 没贴边）
+		if (dockCtrl || st.cfg.dock_hide) {
+			ensureDock();
+			dockCtrl.setEdge(edge === "left" || edge === "right" ? edge : null);
+		}
 	});
 	S.onDragged(() => {
 		/* 位置已经由主进程落盘 */

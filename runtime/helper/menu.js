@@ -86,6 +86,12 @@ async function buildMenu() {
 		})
 	);
 	items.appendChild(
+		itemRow("贴边躲藏", cfg.dock_hide === true ? "on" : "off", async () => {
+			await S.apply({ dock_hide: cfg.dock_hide !== true });
+			close();
+		})
+	);
+	items.appendChild(
 		itemRow("加班", cfg.overtime_enabled === true ? "on" : "off", async () => {
 			await S.apply({ overtime_enabled: cfg.overtime_enabled !== true });
 			close();

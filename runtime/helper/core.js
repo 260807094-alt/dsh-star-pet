@@ -51,6 +51,9 @@
 		show_monthearned: true,
 		show_pouch: true,
 		show_monthremain: true,
+		// 贴边躲藏：贴住屏幕左右边缘后，宠物像弹簧一样跳进边缘只留一颗星星；
+		// 鼠标扫过贴边那条竖带就弹出来，移开再缩回去。默认关闭。
+		dock_hide: false,
 		// 吐槽
 		show_banter: true,
 		banter_every_sec: 30,

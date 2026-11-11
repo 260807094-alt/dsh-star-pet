@@ -35,11 +35,13 @@ eq("默认不含 holidays", D.holidays, undefined);
 eq("默认不含 extra_workdays", D.extra_workdays, undefined);
 eq("默认不含 snap_sides", D.snap_sides, undefined);
 eq("默认不含 overtime_rate_holiday", D.overtime_rate_holiday, undefined);
-eq("配置键总数", Core.CONFIG_KEYS.length, 32);
+eq("配置键总数", Core.CONFIG_KEYS.length, 33);
 // 面板显示开关默认全开（只有显式 false 才隐藏）
 for (const k of ["show_perhour", "show_daybase", "show_monthearned", "show_pouch", "show_monthremain"]) {
 	eq("默认开启 " + k, D[k], true);
 }
+// 贴边躲藏默认关闭（新功能，不打扰老用户）
+eq("默认关闭 dock_hide", D.dock_hide, false);
 
 const now = new Date(2026, 10, 9, 14, 0, 0); // 2026-11-09 周一 14:00
 const m = Core.deriveModel(D);

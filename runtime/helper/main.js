@@ -256,8 +256,19 @@ function endDrag() {
 	// 贴到屏幕左半边 → 整只镜像（渲染端按这个布尔翻转）
 	const left = nb.x + nb.width / 2 < wa.x + wa.width / 2;
 	request("POST", "/window", { x: nb.x, y: nb.y }).catch(() => {});
-	pet.webContents.send("pet:flip", { left });
+	pet.webContents.send("pet:flip", { left, edge: edgeOf(nb, wa, tol) });
 	return { x: nb.x, y: nb.y, left };
+}
+
+/** 窗口是否贴死在屏幕左/右边缘（贴边躲藏用；上下边不做）。
+ *  容差沿用 snapPx，但给 24px 下限 —— 关掉「贴边吸附」后 snapPx 可能是 0，
+ *  若照搬 0 就等于「必须像素级对齐才算是贴边」，躲藏从此永远触发不了。
+ *  24px 与吸附默认值 28 接近，人工拖到边上必然落在里面。 */
+function edgeOf(b, wa, tol) {
+	const t = Math.max(24, Number(tol) || 0);
+	if (Math.abs(b.x - wa.x) <= t) return "left";
+	if (Math.abs(wa.x + wa.width - (b.x + b.width)) <= t) return "right";
+	return null;
 }
 
 // ---------------------------------------------------------------- 菜单窗口
@@ -564,11 +575,14 @@ async function bootstrap() {
 		}, 2500);
 	}
 	pet.webContents.on("did-finish-load", () => {
+		const wa0 = screen.getDisplayNearestPoint({ x: pos.x + w / 2, y: pos.y + h / 2 }).workArea;
 		pet.webContents.send("pet:boot", {
 			base: BASE,
 			token: TOKEN,
 			cfg,
-			left: pos.x + w / 2 < screen.getPrimaryDisplay().workArea.x + screen.getPrimaryDisplay().workArea.width / 2,
+			left: pos.x + w / 2 < wa0.x + wa0.width / 2,
+			// 启动时就贴着屏幕左右边 → 直接进入躲藏（否则要等用户拖一次才生效）
+			edge: edgeOf({ x: pos.x, y: pos.y, width: w, height: h }, wa0, state.snapPx),
 		});
 		if (process.env.DSH_STAR_PET_SHOT) {
 			const delay = Number(process.env.DSH_STAR_PET_SHOT_DELAY || 1800);
