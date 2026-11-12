@@ -764,7 +764,9 @@ function tickBanters(dt) {
 // ───────────────────────────── 悬停提示
 function moveTip(e) {
 	const tip = document.getElementById("tip");
-	if (!st.pointerInside) {
+	// 菜单开着期间一直压制名签：右键出菜单后光标还在宠物上，悬停逻辑会不停
+	// 想把名签露回来，这里在「唯一的显示点」用标志位挡住。
+	if (st.menuOpen || !st.pointerInside) {
 		tip.style.display = "none";
 		return;
 	}
@@ -1020,11 +1022,19 @@ function bindPointer() {
 	window.addEventListener("pointerup", finishDrag);
 	window.addEventListener("pointercancel", finishDrag);
 
+	let menuGen = 0; // 菜单世代号：只让「最后一次」的关闭去清标志，避免被上一个菜单的关闭误清
 	window.addEventListener("contextmenu", (e) => {
 		e.preventDefault();
 		if (!inPet(e.clientX, e.clientY) && !(st.expanded && e.clientY > PAD && e.clientY < PAD + PANEL_H)) return;
+		// 用标志位压制名签：菜单开着期间不露，关了才恢复悬停显示。
+		const gen = ++menuGen;
+		st.menuOpen = true;
+		document.getElementById("tip").style.display = "none";
 		setIgnore(false);
-		S.menu({ kind: "menu" });
+		// S.menu() 在菜单真正关闭时 resolve（见 main.js openMenu）。
+		S.menu({ kind: "menu" }).catch(() => {}).finally(() => {
+			if (menuGen === gen) st.menuOpen = false;
+		});
 	});
 }
 
@@ -1056,11 +1066,11 @@ S.boot(async (payload) => {
 	loadBanter();
 	setInterval(loadBanter, 30000); // 每 30 秒重读 banter.txt，改文件无需重启
 	refresh();
-	// 启动时若本来就贴着屏幕边，直接进入躲藏（无需等下一次拖拽）
+	// 启动时把当前贴边情况记进 dock（哪怕这会儿没开躲藏），开关一开就知道要不要立刻跳进去
+	ensureDock();
+	dockCtrl.setEdge(typeof payload.edge === "string" ? payload.edge : null);
 	if (cfg.dock_hide === true) {
-		ensureDock();
 		dockCtrl.setEnabled(true);
-		dockCtrl.setEdge(typeof payload.edge === "string" ? payload.edge : null);
 	}
 
 	// 两条节奏分开：
@@ -1093,10 +1103,8 @@ S.boot(async (payload) => {
 			layout();
 		}
 		// 贴边躲藏：主进程每次拖拽结束都会告知当前贴的是哪条边（null = 没贴边）
-		if (dockCtrl || st.cfg.dock_hide) {
-			ensureDock();
-			dockCtrl.setEdge(edge === "left" || edge === "right" ? edge : null);
-		}
+		ensureDock();
+		dockCtrl.setEdge(edge === "left" || edge === "right" ? edge : null);
 	});
 	S.onDragged(() => {
 		/* 位置已经由主进程落盘 */

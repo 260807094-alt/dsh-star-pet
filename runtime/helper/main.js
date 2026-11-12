@@ -355,10 +355,14 @@ function openMenu(kind, at) {
 		}
 	});
 	m.on("blur", () => closeMenu());
-	m.on("closed", () => {
-		if (menu === m) menu = null;
+	// 返回 Promise：菜单真正关闭时 resolve，让渲染端能 await 到「菜单关了」，
+	// 从而在菜单开着期间一直压制名签（而不是只在右键瞬间藏一下）。
+	return new Promise((resolve) => {
+		m.on("closed", () => {
+			if (menu === m) menu = null;
+			resolve();
+		});
 	});
-	return { x: m.getBounds().x, y: m.getBounds().y };
 }
 
 // ---------------------------------------------------------------- 设置窗口

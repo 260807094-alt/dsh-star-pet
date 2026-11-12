@@ -248,7 +248,13 @@
 			S.state = IDLE;
 			S.hideAt = 0;
 			S.armed = false;
-			if (!next) S.edge = null;
+			// 开启躲藏且窗口已贴边 -> 立刻跳进去（不必等下一次拖拽）。
+			// 关闭时保留 S.edge（窗口贴着哪条边是客观事实，跟开不开躲藏无关），
+			// 于是「关一下再开」也能立刻触发；currentPose 以 S.enabled 为闸，禁用时 S.edge 不生效。
+			if (next && S.edge) {
+				S.armed = false;
+				startAnim("in");
+			}
 			applyNow();
 		}
 
